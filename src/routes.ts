@@ -1,0 +1,46 @@
+import type { FastifyInstance } from 'fastify';
+import { authRoutes } from './modules/auth/routes.js';
+import { academyRoutes } from './modules/academies/routes.js';
+import { programRoutes } from './modules/programs/routes.js';
+import { discontinuationRoutes } from './modules/discontinuation/routes.js';
+import { mediaRoutes } from './modules/media/routes.js';
+import { bookingRoutes } from './modules/bookings/routes.js';
+import { trialRoutes } from './modules/trials/routes.js';
+import { paymentRoutes } from './modules/payments/routes.js';
+import { attendanceRoutes } from './modules/attendance/routes.js';
+import { reviewRoutes } from './modules/reviews/routes.js';
+import { eventRoutes } from './modules/events/routes.js';
+import { studioRoutes } from './modules/studio/routes.js';
+import { pushRoutes } from './modules/push/routes.js';
+import { batchRoutes } from './modules/batches/routes.js';
+import { coachRoutes } from './modules/coaches/routes.js';
+import { slotRoutes } from './modules/slots/routes.js';
+import { workshopRoutes } from './modules/workshops/routes.js';
+import { meRoutes } from './modules/me/routes.js';
+import { roomRoutes } from './modules/rooms/routes.js';
+import { enrollmentRoutes } from './modules/enrollments/routes.js';
+import { sessionRoutes } from './modules/sessions/routes.js';
+
+export async function registerRoutes(app: FastifyInstance) {
+  await app.register(authRoutes, { prefix: '' });
+  await app.register(academyRoutes, { prefix: '' });
+  await app.register(programRoutes, { prefix: '' });
+  await app.register(bookingRoutes, { prefix: '' });
+  await app.register(trialRoutes, { prefix: '' });
+  await app.register(paymentRoutes, { prefix: '' });
+  await app.register(attendanceRoutes, { prefix: '' });
+  await app.register(reviewRoutes, { prefix: '' });
+  await app.register(eventRoutes, { prefix: '' });
+  await app.register(studioRoutes, { prefix: '' });
+  await app.register(discontinuationRoutes, { prefix: '' });
+  await app.register(mediaRoutes, { prefix: '' });
+  await app.register(pushRoutes, { prefix: '' });
+  await app.register(batchRoutes, { prefix: '' });
+  await app.register(coachRoutes, { prefix: '' });
+  await app.register(slotRoutes, { prefix: '' });
+  await app.register(workshopRoutes, { prefix: '' });
+  await app.register(meRoutes, { prefix: '' });
+  await app.register(roomRoutes, { prefix: '' });
+  await app.register(enrollmentRoutes, { prefix: '' });
+  await app.register(sessionRoutes, { prefix: '' });
+}

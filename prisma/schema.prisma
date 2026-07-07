@@ -1,0 +1,987 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Identity ----------
+
+model User {
+  id              String    @id @default(cuid())
+  phone           String?   @unique
+  email           String?   @unique
+  emailVerified   Boolean   @default(false)
+  appleSub        String?   @unique
+  googleSub       String?   @unique
+  name            String?
+  age             Int?
+  location        String?
+  lat             Float?
+  lng             Float?
+  interests       Category[]
+  avatarInitial   String    @db.VarChar(2)
+  attendanceOtp   String    @db.VarChar(4)
+  createdAt       DateTime  @default(now())
+  lastActiveAt    DateTime  @default(now())
+
+  referralPoints  Int       @default(0)
+  bookings                Booking[]
+  trials                  Trial[]
+  reviews                 Review[]
+  enrollments             Enrollment[]
+  attendances             BatchAttendance[]
+  savedAcademies          SavedAcademy[]
+  workshopRegistrations   WorkshopRegistration[]
+  eventRegistrations      EventRegistration[]
+  referralsSent   Referral[] @relation("ReferralsSent")
+  referralsReceived Referral[] @relation("ReferralsReceived")
+
+  @@index([lat, lng])
+  @@map("users")
+}
+
+model AcademyAccount {
+  id            String    @id @default(cuid())
+  phone         String?   @unique
+  email         String?   @unique
+  emailVerified Boolean   @default(false)
+  appleSub      String?   @unique
+  googleSub     String?   @unique
+  ownerName     String?
+  academyId     String?   @unique
+  academy       Academy?  @relation(fields: [academyId], references: [id])
+  createdAt     DateTime  @default(now())
+
+  @@map("academy_accounts")
+}
+
+enum Category {
+  music
+  dance
+  arts
+  yoga
+}
+
+// Academy's offered delivery modes (set at onboarding). Distinct from a batch's
+// delivery Mode — `home_visit` is offered-only and is not a batch mode.
+enum OfferedMode {
+  in_studio
+  online
+  home_visit
+}
+
+// ---------- Catalog ----------
+
+model Academy {
+  id                String    @id @default(cuid())
+  name              String
+  category          Category
+  address           String
+  lat               Float?
+  lng               Float?
+  verified          Boolean   @default(false)
+  onlineAvailable   Boolean   @default(false)
+  rating            Float     @default(0)
+  ratingCount       Int       @default(0)
+  bio               String?
+  tagline           String?
+  specialities      String[]  @default([])
+  modesOffered      OfferedMode[] @default([])
+  images            String[]  @default([])
+  bankAccountId     String?
+  bankAccountNumber String?
+  bankIfsc          String?
+  bankHolderName    String?
+  pauseRequiresApproval    Boolean           @default(true)
+  transferRequiresApproval Boolean           @default(true)
+  monthlyRefundPolicy      MonthlyRefundPolicy @default(no_refund)
+  // S7: rolling reserve rate withheld from captured revenue (bps; 1000 = 10%).
+  reserveRateBps    Int       @default(1000)
+  createdAt         DateTime  @default(now())
+
+  account           AcademyAccount?
+  coaches           Coach[]
+  programs          Program[]
+  batches           Batch[]
+  reserveHolds      ReserveHold[]
+  recoveries        AcademyRecovery[]
+  trials            Trial[]
+  reviews           Review[]
+  workshops         Workshop[]
+  savedBy           SavedAcademy[]
+  commissionLedger  CommissionLedger[]
+
+  @@index([category, rating])
+  @@index([lat, lng])
+  @@map("academies")
+}
+
+// S2.4: one row per captured trial/enrolment recording Findemy's commission (taken from the
+// academy payout, never added to the learner price). Idempotent via @@unique([itemType,itemId]).
+enum CommissionItemType {
+  trial
+  enrollment
+  workshop
+  event
+}
+
+enum CommissionStatus {
+  accrued
+  reversed
+}
+
+model CommissionLedger {
+  id              String             @id @default(cuid())
+  academyId       String
+  academy         Academy            @relation(fields: [academyId], references: [id])
+  itemType        CommissionItemType
+  itemId          String // bookingId (trial) | enrollmentPeriodId | workshopPaymentId | eventPaymentId
+  grossPaise      Int
+  commissionBps   Int // rate snapshot at capture time
+  commissionPaise Int
+  reversedPaise   Int                @default(0) // proportional reversal on refund
+  status          CommissionStatus   @default(accrued)
+  createdAt       DateTime           @default(now())
+
+  @@unique([itemType, itemId])
+  @@index([academyId, status])
+  @@map("commission_ledger")
+}
+
+// S7 settlement: a rolling reserve tranche withheld from captured revenue (default 10%). Held for
+// 60 days, then released back to the academy — unless drawn first to cover a discontinuation refund.
+enum ReserveStatus {
+  held
+  released
+  consumed
+}
+
+model ReserveHold {
+  id            String        @id @default(cuid())
+  academyId     String
+  academy       Academy       @relation(fields: [academyId], references: [id])
+  amountPaise   Int
+  consumedPaise Int           @default(0) // drawn by refund recoveries
+  sourceType    String // 'enrollment' | 'workshop' | 'trial'
+  sourceId      String
+  heldAt        DateTime      @default(now())
+  releaseAt     DateTime
+  status        ReserveStatus @default(held)
+
+  @@index([academyId, status])
+  @@map("reserve_holds")
+}
+
+// S7 settlement: what Findemy recovers from an academy when it fronts a discontinuation refund.
+// Academy bears the full gross R (incl. Findemy's margin). Reserve is drawn first; the remainder
+// (negativePaise) becomes a negative balance netted from future payouts.
+model AcademyRecovery {
+  id                  String   @id @default(cuid())
+  academyId           String
+  academy             Academy  @relation(fields: [academyId], references: [id])
+  grossPaise          Int
+  reserveAppliedPaise Int      @default(0)
+  negativePaise       Int      @default(0)
+  sourceType          String // 'enrollment_refund'
+  sourceId            String
+  createdAt           DateTime @default(now())
+
+  @@index([academyId])
+  @@map("academy_recoveries")
+}
+
+model Coach {
+  id          String    @id @default(cuid())
+  academyId   String
+  academy     Academy   @relation(fields: [academyId], references: [id])
+  name        String
+  specialty   String
+  bio         String?
+  phone       String?
+  avatarUrl   String?
+  createdAt   DateTime  @default(now())
+
+  batches     Batch[]
+
+  @@index([academyId])
+  @@map("coaches")
+}
+
+// A named offering an academy authors ("Guitar Lessons"). Owns the identity/marketing copy
+// shown to learners; a Program owns many Batches (concrete schedule instances that can each be
+// a different level/coach/timing). See ai-usage/final-app/plan/programs-and-batch-discontinuation.md.
+model Program {
+  id           String   @id @default(cuid())
+  academyId    String
+  academy      Academy  @relation(fields: [academyId], references: [id])
+  title        String
+  category     Category
+  // Academy-authored program copy. (Nullable column; the create-program form enforces required.)
+  description  String?
+  thingsToKnow String[] @default([])
+  createdAt    DateTime @default(now())
+
+  batches      Batch[]
+  media        ProgramMedia[]
+
+  @@index([academyId])
+  @@map("programs")
+}
+
+// Academy-uploaded photos/videos for a program (max 10 combined). Shown at the top of the
+// program screen in both apps. type = 'photo' | 'video'.
+model ProgramMedia {
+  id        String   @id @default(cuid())
+  programId String
+  program   Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  url       String
+  type      String
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([programId])
+  @@map("program_media")
+}
+
+model Batch {
+  id                String        @id @default(cuid())
+  academyId         String
+  academy           Academy       @relation(fields: [academyId], references: [id])
+  programId         String
+  program           Program       @relation(fields: [programId], references: [id])
+  coachId           String
+  coach             Coach         @relation(fields: [coachId], references: [id])
+  // NOTE (expand→migrate→contract): title/category/description/thingsToKnow now live on Program.
+  // They are kept here (denormalized from the parent program) until every consumer reads from
+  // Program; a later cleanup slice drops them. Seed keeps them in sync with the program.
+  title             String
+  category          Category
+  level             String
+  // Academy-authored batch copy shown to learners.
+  description       String?
+  thingsToKnow      String[]      @default([])
+  capacity          Int
+  trialFeePaise     Int
+  monthlyFeePaise   Int
+  // S1.3: academy-set quarterly/annual discounts in basis points, capped at 3000 (30%).
+  // Stored here as the catalog source of truth; consumed by enrol pricing in S2.3.
+  quarterlyDiscountBps Int        @default(0)
+  annualDiscountBps    Int        @default(0)
+  // S3.4: academy-set number of classes per month (the explicit entitled count).
+  sessionsPerMonth  Int           @default(4)
+  // S3.3: the provisioned 100ms live room id for this batch (lazily created).
+  liveRoomId        String?
+  mode              BatchMode     @default(offline)
+  status            BatchStatus   @default(active)
+  // Set when the academy requests discontinuation (status → closing). Drives the 30-day notice gate.
+  discontinueRequestedAt DateTime?
+  createdAt         DateTime      @default(now())
+
+  timings           BatchTiming[]
+  slots             Slot[]
+  bookings          Booking[]
+  trials            Trial[]
+  enrollments       Enrollment[]
+  attendances       BatchAttendance[]
+  reviews           Review[]
+  transferRequestsTo BatchTransferRequest[] @relation("TransferToBatch")
+  cancelledSessions CancelledSession[]
+  sessionCredits    SessionCredit[]
+  sessionReminders  SessionReminderSent[]
+
+  @@index([academyId, status])
+  @@index([programId])
+  @@map("batches")
+}
+
+// S5.2: durable idempotency for class/attendance reminders. Sessions are projected from
+// BatchTiming (no row to mark), so this is the "already reminded" guard per (batch, date, kind).
+enum ReminderKind {
+  class
+  attendance
+}
+
+model SessionReminderSent {
+  id          String       @id @default(cuid())
+  batchId     String
+  batch       Batch        @relation(fields: [batchId], references: [id])
+  sessionDate DateTime     @db.Date
+  kind        ReminderKind
+  sentAt      DateTime     @default(now())
+
+  @@unique([batchId, sessionDate, kind])
+  @@map("session_reminders_sent")
+}
+
+// S3.4: a cancelled class session (no Slot row exists post-S2.1). Idempotency + audit.
+model CancelledSession {
+  id                   String   @id @default(cuid())
+  batchId              String
+  batch                Batch    @relation(fields: [batchId], references: [id])
+  sessionDate          DateTime @db.Date
+  reason               String?
+  cancelledByAccountId String?
+  createdAt            DateTime @default(now())
+
+  credits              SessionCredit[]
+
+  @@unique([batchId, sessionDate])
+  @@map("cancelled_sessions")
+}
+
+// S3.4: a make-good credit (+1 session) appended to an enrolment when a class is cancelled.
+model SessionCredit {
+  id                 String            @id @default(cuid())
+  enrollmentId       String
+  enrollment         Enrollment        @relation(fields: [enrollmentId], references: [id])
+  batchId            String
+  batch              Batch             @relation(fields: [batchId], references: [id])
+  cancelledSessionId String?
+  cancelledSession   CancelledSession? @relation(fields: [cancelledSessionId], references: [id])
+  reason             String
+  sessionCount       Int               @default(1)
+  createdAt          DateTime          @default(now())
+
+  @@index([enrollmentId])
+  @@map("session_credits")
+}
+
+enum BatchStatus {
+  active
+  inactive
+  // Academy-initiated discontinuation lifecycle (see plan §7). `closing`: removed from
+  // discovery + blocks new trials/enrol/renew, but existing enrolments serve out. `ended`:
+  // fully discontinued (deletable).
+  closing
+  ended
+}
+
+enum BatchMode {
+  online
+  offline
+}
+
+model BatchTiming {
+  id            String  @id @default(cuid())
+  batchId       String
+  batch         Batch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  dayOfWeek     Int
+  startTime     String  @db.VarChar(5)
+  durationMin   Int
+
+  @@index([batchId])
+  @@map("batch_timings")
+}
+
+// DORMANT (S2.1 = Option B). Trial booking now runs off `capacity − enrolled` (no slots);
+// Booking/Trial.slotId are nullable and this model is unused by live flows. Kept only to
+// avoid the large deletion blast radius — DELETION DEFERRED as cleanup DF1 (see
+// ai-usage/final-app/plan/deviations-and-deferrals.md). Safe to drop the Slot model +
+// `slots` module + SlotStatus + seed slot rows in that pass.
+model Slot {
+  id              String      @id @default(cuid())
+  batchId         String
+  batch           Batch       @relation(fields: [batchId], references: [id])
+  slotTime        DateTime
+  capacity        Int
+  reservedCount   Int         @default(0)
+  status          SlotStatus  @default(open)
+  createdAt       DateTime    @default(now())
+
+  bookings        Booking[]
+  trials          Trial[]
+
+  @@index([batchId, slotTime])
+  @@map("slots")
+}
+
+enum SlotStatus {
+  open
+  full
+  past
+}
+
+// ---------- Booking + Payment ----------
+
+model Booking {
+  id                      String          @id @default(cuid())
+  userId                  String
+  user                    User            @relation(fields: [userId], references: [id])
+  batchId                 String
+  batch                   Batch           @relation(fields: [batchId], references: [id])
+  // S2.1: trial booking is off capacity, not published slots. slotId is now legacy
+  // (dormant Slot model); trialAt is the canonical chosen trial time.
+  slotId                  String?
+  slot                    Slot?           @relation(fields: [slotId], references: [id])
+  trialAt                 DateTime?
+  status                  BookingStatus   @default(initiated)
+  rescheduleCount         Int             @default(0)
+  reservationExpiresAt    DateTime
+  createdAt               DateTime        @default(now())
+  paidAt                  DateTime?
+  cancelledAt             DateTime?
+
+  payment                 Payment?
+  trial                   Trial?
+
+  @@index([userId, status])
+  @@index([trialAt, status])
+  @@map("bookings")
+}
+
+enum BookingStatus {
+  initiated
+  paid
+  confirmed
+  cancelled
+  rescheduled
+}
+
+model Payment {
+  id                  String        @id @default(cuid())
+  bookingId           String        @unique
+  booking             Booking       @relation(fields: [bookingId], references: [id])
+  amountPaise         Int
+  currency            String        @default("INR") @db.VarChar(3)
+  razorpayOrderId     String        @unique
+  razorpayPaymentId   String?
+  status              PaymentStatus @default(initiated)
+  idempotencyKey      String        @unique
+  refundStatus        RefundStatus?
+  razorpayRefundId    String?
+  refundedAt          DateTime?
+  refundAmountPaise   Int?
+  createdAt           DateTime      @default(now())
+  capturedAt          DateTime?
+
+  @@index([status])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  initiated
+  pending
+  captured
+  failed
+  refunded
+}
+
+enum RefundStatus {
+  requested
+  processed
+  failed
+}
+
+// ---------- Trial ----------
+
+model Trial {
+  id                              String        @id @default(cuid())
+  userId                          String
+  user                            User          @relation(fields: [userId], references: [id])
+  academyId                       String
+  academy                         Academy       @relation(fields: [academyId], references: [id])
+  batchId                         String
+  batch                           Batch         @relation(fields: [batchId], references: [id])
+  // S2.1: slotId legacy (dormant Slot model); trialAt is canonical.
+  slotId                          String?
+  slot                            Slot?         @relation(fields: [slotId], references: [id])
+  bookingId                       String        @unique
+  booking                         Booking       @relation(fields: [bookingId], references: [id])
+  trialAt                         DateTime
+  status                          TrialStatus   @default(booked)
+  attendanceMarkedAt              DateTime?
+  attendanceMarkedByAccountId     String?
+  reminderSent                    Boolean       @default(false) // 23–25h reminder (jobs/trialReminder)
+  reminder1hSent                  Boolean       @default(false) // 1h reminder (workers/trial-reminder) — separate durable guard
+  createdAt                       DateTime      @default(now())
+
+  review                          Review?
+
+  @@index([userId, status])
+  @@index([academyId, status, trialAt])
+  @@map("trials")
+}
+
+enum TrialStatus {
+  booked
+  attended
+  missed
+  cancelled
+}
+
+// ---------- Reviews ----------
+
+// S4.3: a review from a TRIAL-taker or an ENROLLED student. trialId/enrollmentId are
+// nullable+unique (Postgres allows many NULLs); the real rule is one review per (user, academy).
+enum ReviewSource {
+  trial
+  enrollment
+}
+
+model Review {
+  id              String       @id @default(cuid())
+  userId          String
+  user            User         @relation(fields: [userId], references: [id])
+  academyId       String
+  academy         Academy      @relation(fields: [academyId], references: [id])
+  batchId         String
+  batch           Batch        @relation(fields: [batchId], references: [id])
+  source          ReviewSource @default(trial)
+  trialId         String?      @unique
+  trial           Trial?       @relation(fields: [trialId], references: [id])
+  enrollmentId    String?      @unique
+  enrollment      Enrollment?  @relation(fields: [enrollmentId], references: [id])
+  rating          Int          @db.SmallInt
+  comment         String?
+  response        String?
+  respondedAt     DateTime?
+  createdAt       DateTime     @default(now())
+
+  @@unique([userId, academyId])
+  @@index([academyId, createdAt])
+  @@map("reviews")
+}
+
+// ---------- Engagement ----------
+
+model Event {
+  id                   String    @id @default(cuid())
+  type                 EventType
+  title                String
+  category             Category
+  description          String
+  startAt              DateTime
+  endAt                DateTime
+  location             String
+  lat                  Float?
+  lng                  Float?
+  capacity             Int?
+  enrolledCount        Int       @default(0)
+  pricePaise           Int       @default(0)
+  organizerName        String
+  coverColor           String    @db.VarChar(20)
+  registrationDeadline DateTime?
+  prizePaise           Int?
+  isSpotlight          Boolean   @default(false)
+  divisions            String[]
+  createdAt            DateTime  @default(now())
+
+  registrations        EventRegistration[]
+
+  @@index([type, startAt])
+  @@map("events")
+}
+
+enum EventType {
+  competition
+  talent_hunt
+  meetup
+}
+
+// S4.4: workshops are Online or Offline only (masterclass/demo dropped); non-refundable.
+enum WorkshopType {
+  online
+  offline
+}
+
+model Workshop {
+  id               String       @id @default(cuid())
+  academyId        String
+  academy          Academy      @relation(fields: [academyId], references: [id])
+  type             WorkshopType
+  title            String
+  description      String
+  startAt          DateTime
+  durationMin      Int
+  location         String?
+  capacity         Int
+  registeredCount  Int          @default(0)
+  pricePaise       Int          @default(0)
+  status           String       @default("upcoming")
+  createdAt        DateTime     @default(now())
+
+  registrations    WorkshopRegistration[]
+
+  @@index([academyId, startAt])
+  @@map("workshops")
+}
+
+model WorkshopRegistration {
+  id          String               @id @default(cuid())
+  workshopId  String
+  workshop    Workshop             @relation(fields: [workshopId], references: [id])
+  userId      String
+  user        User                 @relation(fields: [userId], references: [id])
+  status      RegistrationStatus   @default(pending)
+  cancelledAt DateTime?
+  createdAt   DateTime             @default(now())
+
+  payment     WorkshopPayment?
+
+  @@unique([workshopId, userId])
+  @@map("workshop_registrations")
+}
+
+enum RegistrationStatus {
+  pending
+  confirmed
+  cancelled
+}
+
+model WorkshopPayment {
+  id                String        @id @default(cuid())
+  registrationId    String        @unique
+  registration      WorkshopRegistration @relation(fields: [registrationId], references: [id])
+  amountPaise       Int
+  currency          String        @default("INR") @db.VarChar(3)
+  razorpayOrderId   String        @unique
+  razorpayPaymentId String?
+  status            PaymentStatus @default(initiated)
+  idempotencyKey    String        @unique
+  refundStatus      RefundStatus?
+  razorpayRefundId  String?
+  refundedAt        DateTime?
+  refundAmountPaise Int?
+  createdAt         DateTime      @default(now())
+  capturedAt        DateTime?
+
+  @@index([status])
+  @@map("workshop_payments")
+}
+
+model EventRegistration {
+  id          String             @id @default(cuid())
+  eventId     String
+  event       Event              @relation(fields: [eventId], references: [id])
+  userId      String
+  user        User               @relation(fields: [userId], references: [id])
+  status      RegistrationStatus @default(pending)
+  cancelledAt DateTime?
+  createdAt   DateTime           @default(now())
+
+  payment     EventPayment?
+
+  @@unique([eventId, userId])
+  @@map("event_registrations")
+}
+
+model EventPayment {
+  id                String        @id @default(cuid())
+  registrationId    String        @unique
+  registration      EventRegistration @relation(fields: [registrationId], references: [id])
+  amountPaise       Int
+  currency          String        @default("INR") @db.VarChar(3)
+  razorpayOrderId   String        @unique
+  razorpayPaymentId String?
+  status            PaymentStatus @default(initiated)
+  idempotencyKey    String        @unique
+  refundStatus      RefundStatus?
+  razorpayRefundId  String?
+  refundedAt        DateTime?
+  refundAmountPaise Int?
+  createdAt         DateTime      @default(now())
+  capturedAt        DateTime?
+
+  @@index([status])
+  @@map("event_payments")
+}
+
+// ---------- Enrollment ----------
+
+model Enrollment {
+  id                     String             @id @default(cuid())
+  userId                 String
+  user                   User               @relation(fields: [userId], references: [id])
+  batchId                String
+  batch                  Batch              @relation(fields: [batchId], references: [id])
+  status                 EnrollmentStatus   @default(active)
+  currentPeriodId        String?
+  defaultPackage         EnrollmentPackage?
+  pausedUntil            DateTime?
+  discontinueRequestedAt DateTime?
+  startedAt              DateTime           @default(now())
+
+  periods          EnrollmentPeriod[]
+  pauses           EnrollmentPause[]
+  transferRequests BatchTransferRequest[] @relation("TransferFromEnrollment")
+  sessionCredits   SessionCredit[]
+  reviews          Review[]
+
+  @@unique([userId, batchId])
+  @@map("enrollments")
+}
+
+enum EnrollmentStatus {
+  active
+  inactive
+}
+
+enum EnrollmentPackage {
+  monthly
+  quarterly
+  biannual
+  annual
+}
+
+model EnrollmentPeriod {
+  id                     String                 @id @default(cuid())
+  enrollmentId           String
+  enrollment             Enrollment             @relation(fields: [enrollmentId], references: [id])
+  packageType            EnrollmentPackage
+  startDate              DateTime               @db.Date
+  endDate                DateTime               @db.Date
+  amountPaise            Int
+  status                 EnrollmentPeriodStatus @default(active)
+  gracePeriodEnd         DateTime?
+  lastReminderSentAt     DateTime?
+  remindersSentCount     Int                    @default(0)
+  discontinueRequestedAt DateTime?
+  discontinueEffectiveAt DateTime?
+  discontinueReason      DiscontinuationReason?
+  createdAt              DateTime               @default(now())
+
+  payment                EnrollmentPayment?
+
+  @@index([enrollmentId, endDate])
+  @@map("enrollment_periods")
+}
+
+enum EnrollmentPeriodStatus {
+  active
+  grace
+  expired
+  cancelled
+}
+
+enum DiscontinuationReason {
+  schedule_issue
+  financial
+  moving_city
+  not_satisfied
+  switching_academy
+  other
+}
+
+model EnrollmentPayment {
+  id                 String            @id @default(cuid())
+  enrollmentPeriodId String            @unique
+  enrollmentPeriod   EnrollmentPeriod  @relation(fields: [enrollmentPeriodId], references: [id])
+  amountPaise        Int
+  currency           String            @default("INR") @db.VarChar(3)
+  razorpayOrderId    String            @unique
+  razorpayPaymentId  String?
+  status             PaymentStatus     @default(initiated)
+  idempotencyKey     String            @unique
+  refundStatus       RefundStatus?
+  razorpayRefundId   String?
+  refundedAt         DateTime?
+  refundAmountPaise  Int?
+  createdAt          DateTime          @default(now())
+  capturedAt         DateTime?
+
+  @@index([status])
+  @@map("enrollment_payments")
+}
+
+model EnrollmentPause {
+  id             String        @id @default(cuid())
+  enrollmentId   String
+  enrollment     Enrollment    @relation(fields: [enrollmentId], references: [id])
+  duration       PauseDuration
+  reason         String?
+  status         PauseStatus   @default(pending)
+  startDate      DateTime?
+  endDate        DateTime?
+  requestedAt    DateTime      @default(now())
+  approvedAt     DateTime?
+  rejectedAt     DateTime?
+  rejectedReason String?
+  resumedAt      DateTime?
+
+  @@index([enrollmentId, status])
+  @@map("enrollment_pauses")
+}
+
+enum PauseDuration {
+  one_week
+  two_weeks
+  one_month
+}
+
+enum PauseStatus {
+  pending
+  approved
+  active
+  ended
+  rejected
+}
+
+model BatchTransferRequest {
+  id               String                @id @default(cuid())
+  fromEnrollmentId String
+  fromEnrollment   Enrollment            @relation("TransferFromEnrollment", fields: [fromEnrollmentId], references: [id])
+  toBatchId        String
+  toBatch          Batch                 @relation("TransferToBatch", fields: [toBatchId], references: [id])
+  reason           String?
+  status           TransferRequestStatus @default(pending)
+  requestedAt      DateTime              @default(now())
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  rejectedReason   String?
+  newEnrollmentId  String?
+
+  @@index([fromEnrollmentId])
+  @@index([toBatchId, status])
+  @@map("batch_transfer_requests")
+}
+
+enum TransferRequestStatus {
+  pending
+  approved
+  rejected
+}
+
+enum MonthlyRefundPolicy {
+  no_refund
+  prorated
+  full_if_early
+}
+
+// ---------- Batch Attendance ----------
+
+model BatchAttendance {
+  id                    String    @id @default(cuid())
+  batchId               String
+  batch                 Batch     @relation(fields: [batchId], references: [id])
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id])
+  date                  DateTime  @db.Date
+  present               Boolean
+  markedByAccountId     String?
+  markedAt              DateTime  @default(now())
+
+  @@unique([batchId, userId, date])
+  @@map("batch_attendances")
+}
+
+// ---------- Plumbing ----------
+
+model RefreshToken {
+  id            String    @id @default(cuid())
+  subjectId     String
+  subjectRole   SubjectRole
+  tokenHash     String    @unique
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([subjectId, subjectRole])
+  @@map("refresh_tokens")
+}
+
+enum SubjectRole {
+  student
+  academy
+}
+
+model ExpoPushToken {
+  id            String    @id @default(cuid())
+  // Polymorphic subject: a student's User.id OR an academy's AcademyAccount.id (by subjectRole).
+  // No FK — subjectId can reference either table, so a User FK wrongly rejected academy tokens.
+  subjectId     String
+  subjectRole   SubjectRole
+  token         String    @unique
+  platform      Platform
+  lastSeenAt    DateTime  @default(now())
+
+  @@index([subjectId, subjectRole])
+  @@map("expo_push_tokens")
+}
+
+enum Platform {
+  ios
+  android
+}
+
+model OtpRequest {
+  id          String      @id
+  phone       String
+  role        SubjectRole
+  codeHash    String
+  attempts    Int         @default(0)
+  verified    Boolean     @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime    @default(now())
+
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+  @@map("otp_requests")
+}
+
+model AcademySettings {
+  accountId                   String    @id
+  notificationsNewTrial       Boolean   @default(true)
+  notificationsReview         Boolean   @default(true)
+  privacyShowPhone            Boolean   @default(false)
+  notificationPrefs           Json?
+  quietHoursEnabled           Boolean   @default(false)
+  quietStart                  String?
+  quietEnd                    String?
+  contactEmail                String?
+  contactWhatsapp             String?
+
+  @@map("academy_settings")
+}
+
+model Payout {
+  id              String    @id @default(cuid())
+  academyId       String
+  amountPaise     Int
+  status          PayoutStatus
+  paidAt          DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([academyId, createdAt])
+  @@map("payouts")
+}
+
+enum PayoutStatus {
+  pending
+  paid
+  failed
+}
+
+model SavedAcademy {
+  id        String   @id @default(cuid())
+  userId    String
+  academyId String
+  savedAt   DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  academy   Academy  @relation(fields: [academyId], references: [id])
+
+  @@unique([userId, academyId])
+  @@map("saved_academies")
+}
+
+enum ReferralStatus {
+  pending
+  claimed
+  expired
+}
+
+model Referral {
+  id          String         @id @default(cuid())
+  referrerId  String
+  referreeId  String?
+  code        String         @unique
+  status      ReferralStatus @default(pending)
+  createdAt   DateTime       @default(now())
+  claimedAt   DateTime?
+  referrer    User           @relation("ReferralsSent", fields: [referrerId], references: [id])
+  referree    User?          @relation("ReferralsReceived", fields: [referreeId], references: [id])
+
+  @@map("referrals")
+}
