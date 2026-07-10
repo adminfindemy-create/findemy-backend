@@ -15,15 +15,15 @@ export async function sendTrialReminders() {
   });
 
   let sent = 0;
-  for (const t of trials) {
+  for (const trial of trials) {
     await sendPushNotifications({
-      subjectId: t.userId,
+      subjectId: trial.userId,
       subjectRole: 'student',
       title: 'Trial reminder',
-      body: `Your trial for ${t.batch.title} is in 1 hour`,
-      data: { screen: 'bookings', trialId: t.id },
+      body: `Your trial for ${trial.batch.title} is in 1 hour`,
+      data: { screen: 'bookings', trialId: trial.id },
     });
-    await prisma.trial.update({ where: { id: t.id }, data: { reminder1hSent: true } });
+    await prisma.trial.update({ where: { id: trial.id }, data: { reminder1hSent: true } });
     sent++;
   }
   return { sent };

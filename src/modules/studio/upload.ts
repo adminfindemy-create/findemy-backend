@@ -74,7 +74,7 @@ export async function removeAcademyImage(academyId: string, imageUrl: string) {
 
   return prisma.academy.update({
     where: { id: academyId },
-    data: { images: academy.images.filter((u) => u !== imageUrl) },
+    data: { images: academy.images.filter((existingUrl) => existingUrl !== imageUrl) },
     select: { images: true },
   });
 }

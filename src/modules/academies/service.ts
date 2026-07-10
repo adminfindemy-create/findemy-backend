@@ -5,8 +5,9 @@ import * as repo from './repo.js';
 
 type Category = 'music' | 'dance' | 'arts' | 'yoga';
 
+// Great-circle distance between two lat/lng points, in kilometers.
 function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371;
+  const earthRadiusKm = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
   const a =
@@ -16,11 +17,11 @@ function haversine(lat1: number, lng1: number, lat2: number, lng2: number): numb
       Math.sin(dLng / 2) *
       Math.sin(dLng / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+  return earthRadiusKm * c;
 }
 
-function toRad(v: number) {
-  return (v * Math.PI) / 180;
+function toRad(degrees: number) {
+  return (degrees * Math.PI) / 180;
 }
 
 export async function listAcademies(query: {
@@ -39,7 +40,7 @@ export async function listAcademies(query: {
   const cursor = query.cursor ? decodeCursor(query.cursor) : undefined;
   const hasLocation = query.lat != null && query.lng != null;
 
-  const rows = await repo.searchAcademies({
+  const academyRows = await repo.searchAcademies({
     q: query.q,
     category: query.category,
     online: query.online,
@@ -48,42 +49,47 @@ export async function listAcademies(query: {
     cursor: cursor ?? undefined,
   });
 
-  let items = rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    category: r.category,
-    address: r.address,
-    lat: r.lat,
-    lng: r.lng,
-    verified: r.verified,
-    online_available: r.onlineAvailable,
-    rating: r.rating,
-    rating_count: r.ratingCount,
-    bio: r.bio,
-    images: r.images,
+  let items = academyRows.map((academy) => ({
+    id: academy.id,
+    name: academy.name,
+    category: academy.category,
+    address: academy.address,
+    lat: academy.lat,
+    lng: academy.lng,
+    verified: academy.verified,
+    online_available: academy.onlineAvailable,
+    rating: academy.rating,
+    rating_count: academy.ratingCount,
+    bio: academy.bio,
+    images: academy.images,
     // "Trial from" = cheapest trial across the academy's batches (null if none).
-    trial_from_paise: r.batches.length ? Math.min(...r.batches.map((b) => b.trialFeePaise)) : null,
-    monthly_from_paise: r.batches.length ? Math.min(...r.batches.map((b) => b.monthlyFeePaise)) : null,
-    created_at: r.createdAt.toISOString(),
+    trial_from_paise: academy.batches.length ? Math.min(...academy.batches.map((batch) => batch.trialFeePaise)) : null,
+    monthly_from_paise: academy.batches.length ? Math.min(...academy.batches.map((batch) => batch.monthlyFeePaise)) : null,
+    created_at: academy.createdAt.toISOString(),
     distance_km: hasLocation
-      ? // r.lat/r.lng are Float? in Prisma; at runtime null coerces to 0 in the
+      ? // academy.lat/lng are Float? in Prisma; at runtime null coerces to 0 in the
         // haversine arithmetic, so `?? 0` is behavior-equivalent.
-        haversine(query.lat!, query.lng!, r.lat ?? 0, r.lng ?? 0)
+        haversine(query.lat!, query.lng!, academy.lat ?? 0, academy.lng ?? 0)
       : null,
   }));
 
   if (hasLocation && query.radius_km) {
-    items = items.filter((i) => (i.distance_km ?? Infinity) <= query.radius_km!);
+    items = items.filter((item) => (item.distance_km ?? Infinity) <= query.radius_km!);
   }
 
   if (query.min_rating) {
-    items = items.filter((i) => i.rating >= query.min_rating!);
+    items = items.filter((item) => item.rating >= query.min_rating!);
   }
 
   if (query.sort === 'distance' && hasLocation) {
-    items.sort((a, b) => (a.distance_km ?? Infinity) - (b.distance_km ?? Infinity));
+    items.sort((itemA, itemB) => (itemA.distance_km ?? Infinity) - (itemB.distance_km ?? Infinity));
   } else if (query.sort === 'top_rated') {
-    items.sort((a, b) => b.rating * Math.log(b.rating_count + 1) - a.rating * Math.log(a.rating_count + 1));
+    // Bayesian-ish blend: weight rating by log(review count) so a 5★/1-review academy
+    // doesn't outrank a 4.8★/500-review one.
+    items.sort(
+      (itemA, itemB) =>
+        itemB.rating * Math.log(itemB.rating_count + 1) - itemA.rating * Math.log(itemA.rating_count + 1),
+    );
   }
 
   const hasMore = items.length > limit;
@@ -110,10 +116,10 @@ export async function getAcademyById(id: string) {
   // Map batches once, then group by program so programs and the flat list share the shape.
   const batchesWire = academy.batches.map(toBatchWire);
   const batchesByProgram = new Map<string, typeof batchesWire>();
-  for (const b of batchesWire) {
-    const list = batchesByProgram.get(b.program_id) ?? [];
-    list.push(b);
-    batchesByProgram.set(b.program_id, list);
+  for (const batch of batchesWire) {
+    const programBatches = batchesByProgram.get(batch.program_id) ?? [];
+    programBatches.push(batch);
+    batchesByProgram.set(batch.program_id, programBatches);
   }
 
   return {
@@ -134,36 +140,36 @@ export async function getAcademyById(id: string) {
       images: academy.images,
       created_at: academy.createdAt.toISOString(),
     },
-    coaches: academy.coaches.map((c) => ({
-      id: c.id,
-      academy_id: c.academyId,
-      name: c.name,
-      specialty: c.specialty,
-      bio: c.bio,
-      phone: c.phone,
-      created_at: c.createdAt.toISOString(),
+    coaches: academy.coaches.map((coach) => ({
+      id: coach.id,
+      academy_id: coach.academyId,
+      name: coach.name,
+      specialty: coach.specialty,
+      bio: coach.bio,
+      phone: coach.phone,
+      created_at: coach.createdAt.toISOString(),
     })),
     // Flat batch list (kept for back-compat during the programs migration).
     batches: batchesWire,
     // Programs with nested batches. A program is surfaced only if it has ≥1 active batch
     // (empty programs are academy-only). Ordered by title for a stable catalog.
     programs: academy.programs
-      .map((p) => toProgramWire(p, batchesByProgram.get(p.id) ?? []))
-      .filter((p) => p.batches.length > 0)
-      .sort((a, b) => a.title.localeCompare(b.title)),
-    reviews: academy.reviews.map((r) => ({
-      id: r.id,
-      user_id: r.userId,
-      academy_id: r.academyId,
-      batch_id: r.batchId,
-      trial_id: r.trialId,
-      rating: r.rating,
-      comment: r.comment,
-      response: r.response,
-      responded_at: r.respondedAt?.toISOString() ?? null,
-      created_at: r.createdAt.toISOString(),
-      user_name: r.user.name,
-      user_avatar_initial: r.user.avatarInitial,
+      .map((program) => toProgramWire(program, batchesByProgram.get(program.id) ?? []))
+      .filter((program) => program.batches.length > 0)
+      .sort((programA, programB) => programA.title.localeCompare(programB.title)),
+    reviews: academy.reviews.map((review) => ({
+      id: review.id,
+      user_id: review.userId,
+      academy_id: review.academyId,
+      batch_id: review.batchId,
+      trial_id: review.trialId,
+      rating: review.rating,
+      comment: review.comment,
+      response: review.response,
+      responded_at: review.respondedAt?.toISOString() ?? null,
+      created_at: review.createdAt.toISOString(),
+      user_name: review.user.name,
+      user_avatar_initial: review.user.avatarInitial,
     })),
   };
 }
@@ -173,10 +179,10 @@ export async function getAcademyReviews(
   cursor?: string,
   limit = 20,
 ) {
-  const decoded = cursor ? decodeCursor(cursor) : undefined;
+  const decodedCursor = cursor ? decodeCursor(cursor) : undefined;
   const reviews = await repo.findAcademyReviews(
     academyId,
-    decoded ?? undefined,
+    decodedCursor ?? undefined,
     limit,
   );
 
@@ -192,19 +198,19 @@ export async function getAcademyReviews(
       : null;
 
   return {
-    items: items.map((r) => ({
-      id: r.id,
-      user_id: r.userId,
-      academy_id: r.academyId,
-      batch_id: r.batchId,
-      trial_id: r.trialId,
-      rating: r.rating,
-      comment: r.comment,
-      response: r.response,
-      responded_at: r.respondedAt?.toISOString() ?? null,
-      created_at: r.createdAt.toISOString(),
-      user_name: r.user.name,
-      user_avatar_initial: r.user.avatarInitial,
+    items: items.map((review) => ({
+      id: review.id,
+      user_id: review.userId,
+      academy_id: review.academyId,
+      batch_id: review.batchId,
+      trial_id: review.trialId,
+      rating: review.rating,
+      comment: review.comment,
+      response: review.response,
+      responded_at: review.respondedAt?.toISOString() ?? null,
+      created_at: review.createdAt.toISOString(),
+      user_name: review.user.name,
+      user_avatar_initial: review.user.avatarInitial,
     })),
     next_cursor: nextCursor,
   };

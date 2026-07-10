@@ -54,17 +54,18 @@ export async function sendPushNotifications({
     if (accountId) resolvedSubjectId = accountId;
   }
 
-  const tokens = await repo.findPushTokens(resolvedSubjectId, subjectRole);
+  const pushTokens = await repo.findPushTokens(resolvedSubjectId, subjectRole);
   const expo = getExpo();
-  const messages = tokens
-    .map((t) => ({
-      to: t.token,
+  const messages = pushTokens
+    .map((pushToken) => ({
+      to: pushToken.token,
       sound: 'default',
       title,
       body,
       data: data ?? {},
     }))
-    .filter((m): m is any => Expo.isExpoPushToken(m.to));
+    // A token can go stale (uninstalled app, expired) between when it was stored and now.
+    .filter((message): message is any => Expo.isExpoPushToken(message.to));
 
   const chunks = expo.chunkPushNotifications(messages);
   let sent = 0;

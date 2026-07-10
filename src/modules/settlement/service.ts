@@ -36,13 +36,13 @@ export async function applyRefundRecovery(args: {
   const holds = await repo.getAvailableHolds(args.academyId);
   let remaining = R;
   let reserveApplied = 0;
-  for (const h of holds) {
+  for (const hold of holds) {
     if (remaining <= 0) break;
-    const available = h.amountPaise - h.consumedPaise;
+    const available = hold.amountPaise - hold.consumedPaise;
     if (available <= 0) continue;
     const draw = Math.min(available, remaining);
-    const newConsumed = h.consumedPaise + draw;
-    await repo.consumeHold(h.id, newConsumed, newConsumed >= h.amountPaise);
+    const newConsumed = hold.consumedPaise + draw;
+    await repo.consumeHold(hold.id, newConsumed, newConsumed >= hold.amountPaise);
     reserveApplied += draw;
     remaining -= draw;
   }
@@ -61,13 +61,13 @@ export async function applyRefundRecovery(args: {
 }
 
 export async function getSettlement(academyId: string) {
-  const s = await repo.getReserveSummary(academyId);
+  const summary = await repo.getReserveSummary(academyId);
   return {
     reserve_rate_bps: 1000,
-    reserve_held_paise: s.reserve_held_paise,
-    reserve_released_paise: s.reserve_released_paise,
+    reserve_held_paise: summary.reserve_held_paise,
+    reserve_released_paise: summary.reserve_released_paise,
     // What the academy owes Findemy (netted from future payouts).
-    outstanding_recovery_paise: s.outstanding_recovery_paise,
+    outstanding_recovery_paise: summary.outstanding_recovery_paise,
   };
 }
 

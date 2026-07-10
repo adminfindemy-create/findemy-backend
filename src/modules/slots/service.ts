@@ -19,24 +19,24 @@ export async function publishSlots(
 
   // Grid mode: explicit per-time slots, each with its own capacity (max trials).
   // The typed time is an IST wall-clock; store the matching UTC instant.
-  for (const s of data.slots ?? []) {
-    const [h, m] = s.time.split(':').map(Number);
+  for (const slotSpec of data.slots ?? []) {
+    const [hour, minute] = slotSpec.time.split(':').map(Number);
     candidates.push({
       id: newId(),
       batchId: data.batch_id,
-      slotTime: istWallClockToUtc(s.date, h ?? 0, m ?? 0),
-      capacity: s.capacity ?? batch.capacity,
+      slotTime: istWallClockToUtc(slotSpec.date, hour ?? 0, minute ?? 0),
+      capacity: slotSpec.capacity ?? batch.capacity,
     });
   }
 
   // Quick mode: whole-day publish derived from the batch's configured timings.
   for (const dateStr of data.dates ?? []) {
     for (const timing of batch.timings) {
-      const [h, m] = timing.startTime.split(':').map(Number);
+      const [hour, minute] = timing.startTime.split(':').map(Number);
       candidates.push({
         id: newId(),
         batchId: data.batch_id,
-        slotTime: istWallClockToUtc(dateStr, h ?? 0, m ?? 0),
+        slotTime: istWallClockToUtc(dateStr, hour ?? 0, minute ?? 0),
         capacity: batch.capacity,
       });
     }
@@ -45,17 +45,17 @@ export async function publishSlots(
   // Dedupe by (batch, slotTime): first within this request, then against
   // slots already published for the batch — re-publishing the same dates is
   // a no-op instead of creating duplicate slots.
-  const existing = await repo.findExistingSlotMillis(
+  const existingSlotMillis = await repo.findExistingSlotMillis(
     data.batch_id,
-    candidates.map((c) => c.slotTime),
+    candidates.map((candidate) => candidate.slotTime),
   );
-  const seen = new Set<number>(existing);
+  const seenMillis = new Set<number>(existingSlotMillis);
   const slots: typeof candidates = [];
-  for (const c of candidates) {
-    const key = c.slotTime.getTime();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    slots.push(c);
+  for (const candidate of candidates) {
+    const millis = candidate.slotTime.getTime();
+    if (seenMillis.has(millis)) continue;
+    seenMillis.add(millis);
+    slots.push(candidate);
   }
 
   if (slots.length > 0) await repo.createSlots(slots);

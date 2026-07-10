@@ -17,8 +17,8 @@ export async function createBooking({
   // (no published slots). A booked trial does NOT consume a spot (headroom is enrolments only).
   const { assertValidTrialTime, getBatchAvailability } = await import('../batches/service.js');
   const validTrialAt = await assertValidTrialTime(batchId, trialAt);
-  const avail = await getBatchAvailability(batchId);
-  if (!avail.accepting || avail.available <= 0) {
+  const availability = await getBatchAvailability(batchId);
+  if (!availability.accepting || availability.available <= 0) {
     throw new AppError('BATCH_FULL', 409, 'No trial spots available for this batch');
   }
   const batch = await prisma.batch.findUnique({ where: { id: batchId }, select: { trialFeePaise: true } });
@@ -124,9 +124,9 @@ export async function cancelBooking(
   }
 
   const updated = await prisma.$transaction(async (tx) => {
-    const b = await repo.cancelBooking(id, tx);
+    const cancelledBooking = await repo.cancelBooking(id, tx);
     await repo.cancelTrialForBooking(id, tx);
-    return b;
+    return cancelledBooking;
   });
 
   let refundInitiated = false;

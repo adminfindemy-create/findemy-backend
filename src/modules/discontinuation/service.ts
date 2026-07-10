@@ -24,16 +24,16 @@ function computeBlockers(
   now: Date,
 ): Blocker[] {
   const blockers: Blocker[] = [];
-  for (const e of enrollments) {
-    const future = e.periods.find((p) => p.endDate && p.endDate > now);
-    if (!future) continue;
+  for (const enrollment of enrollments) {
+    const futurePeriod = enrollment.periods.find((period) => period.endDate && period.endDate > now);
+    if (!futurePeriod) continue;
     blockers.push({
-      enrollment_id: e.id,
-      user_id: e.user.id,
-      student_name: e.user.name,
-      paid_through: future.endDate!.toISOString(),
-      package_type: future.packageType,
-      amount_paise: future.amountPaise,
+      enrollment_id: enrollment.id,
+      user_id: enrollment.user.id,
+      student_name: enrollment.user.name,
+      paid_through: futurePeriod.endDate!.toISOString(),
+      package_type: futurePeriod.packageType,
+      amount_paise: futurePeriod.amountPaise,
     });
   }
   return blockers;
@@ -58,17 +58,17 @@ export async function discontinueBatch(batchId: string, academyId: string) {
   // Findemy-neutral (plan §11) — full refund + standard commission reversal, no reserve impact.
   const cancelledTrials = await repo.cancelBookedFutureTrials(batchId, now);
   const trialPayments = await repo.getCapturedTrialPayments(
-    cancelledTrials.map((t) => t.bookingId).filter((b): b is string => !!b),
+    cancelledTrials.map((trial) => trial.bookingId).filter((bookingId): bookingId is string => !!bookingId),
   );
   if (trialPayments.length > 0) {
     const { issueRazorpayRefund } = await import('../payments/service.js');
     const { updatePaymentRefunded, reverseCommission } = await import('../payments/repo.js');
-    for (const p of trialPayments) {
-      if (!p.razorpayPaymentId || p.amountPaise <= 0) continue;
+    for (const payment of trialPayments) {
+      if (!payment.razorpayPaymentId || payment.amountPaise <= 0) continue;
       try {
-        const refundId = await issueRazorpayRefund(p.razorpayPaymentId, p.amountPaise);
-        await updatePaymentRefunded(p.id, refundId, p.amountPaise);
-        await reverseCommission('trial', p.bookingId!, p.amountPaise);
+        const refundId = await issueRazorpayRefund(payment.razorpayPaymentId, payment.amountPaise);
+        await updatePaymentRefunded(payment.id, refundId, payment.amountPaise);
+        await reverseCommission('trial', payment.bookingId!, payment.amountPaise);
       } catch { /* reconcile worker retries */ }
     }
   }
@@ -76,7 +76,7 @@ export async function discontinueBatch(batchId: string, academyId: string) {
 
   // Notify enrolled students + trial students (best-effort).
   const enrolledIds = await repo.getActiveEnrolledUserIds(batchId);
-  const notifyIds = Array.from(new Set([...enrolledIds, ...cancelledTrials.map((t) => t.userId)]));
+  const notifyIds = Array.from(new Set([...enrolledIds, ...cancelledTrials.map((trial) => trial.userId)]));
   await Promise.all(
     notifyIds.map((userId) =>
       sendPushNotifications({
@@ -128,16 +128,16 @@ export async function getBatchDiscontinuation(batchId: string, academyId: string
 // Count weekly class sessions in [from, to] given the batch's timings (day-of-week 0–6 = getDay()).
 function countSessions(daysOfWeek: number[], from: Date, to: Date): number {
   if (to <= from || daysOfWeek.length === 0) return 0;
-  const days = new Set(daysOfWeek);
-  const d = new Date(from);
-  d.setHours(0, 0, 0, 0);
+  const scheduledDays = new Set(daysOfWeek);
+  const cursor = new Date(from);
+  cursor.setHours(0, 0, 0, 0);
   const end = new Date(to);
   end.setHours(0, 0, 0, 0);
   let count = 0;
-  let guard = 0;
-  while (d <= end && guard < 1000) {
-    if (days.has(d.getDay())) count++;
-    d.setDate(d.getDate() + 1);
+  let guard = 0; // safety cap so a bad date range can't loop forever
+  while (cursor <= end && guard < 1000) {
+    if (scheduledDays.has(cursor.getDay())) count++;
+    cursor.setDate(cursor.getDate() + 1);
     guard++;
   }
   return count;
@@ -189,7 +189,7 @@ export async function refundBlockerEnrollment(batchId: string, enrollmentId: str
   let razorpayRefundId: string | null = null;
 
   if (period && new Date(period.endDate) > now) {
-    const daysOfWeek = enrollment.batch.timings.map((t) => t.dayOfWeek);
+    const daysOfWeek = enrollment.batch.timings.map((timing) => timing.dayOfWeek);
     refundAmountPaise = computeRefundPaise(
       period.amountPaise,
       new Date(period.startDate),

@@ -5,6 +5,8 @@ import { env } from '../../lib/env.js';
 import { prisma } from '../../lib/prisma.js';
 import * as repo from './repo.js';
 
+// Lazily constructed & cached — avoids paying the `import('razorpay')` cost on every
+// request, and avoids constructing a client with empty keys when running mocked/unconfigured.
 let razorpayInstance: any;
 async function getRazorpay() {
   if (razorpayInstance) return razorpayInstance;
@@ -20,8 +22,8 @@ export async function issueRazorpayRefund(razorpayPaymentId: string, amountPaise
   if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
     return `refund_mock_${newId().slice(0, 12)}`;
   }
-  const rp = await getRazorpay();
-  const refund = await rp.payments.refund(razorpayPaymentId, { amount: amountPaise, speed: 'optimum' });
+  const razorpayClient = await getRazorpay();
+  const refund = await razorpayClient.payments.refund(razorpayPaymentId, { amount: amountPaise, speed: 'optimum' });
   return refund.id as string;
 }
 
@@ -63,11 +65,13 @@ export async function createOrder({ bookingId }: { bookingId: string }) {
     };
   }
 
+  // Fallback id used when Razorpay isn't configured (local/dev) — keeps the booking
+  // flow working end-to-end without a real payment gateway.
   let razorpayOrderId = `order_${newId().slice(0, 12)}`;
 
   if (env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET) {
-    const rp = await getRazorpay();
-    const order = await rp.orders.create({
+    const razorpayClient = await getRazorpay();
+    const order = await razorpayClient.orders.create({
       amount: amountPaise,
       currency: 'INR',
       receipt: bookingId,
@@ -98,6 +102,9 @@ import { sendPushNotifications } from '../push/service.js';
 import * as workshopRepo from '../workshops/repo.js';
 import { accrueReserveOnCapture } from '../settlement/service.js';
 
+// Razorpay sends the same webhook shape for every payment type; we don't know which of our
+// three "payment" tables (enrollment / event / workshop / trial booking) a given order_id
+// belongs to until we look it up, so we just try each one in turn and handle whichever matches.
 export async function handleWebhook(body: Record<string, unknown>, signature: string, rawBody?: string) {
   const secret = env.RAZORPAY_WEBHOOK_SECRET || '';
   if (secret) {
@@ -118,43 +125,45 @@ export async function handleWebhook(body: Record<string, unknown>, signature: st
   const orderId = payloadEntity.order_id as string;
   if (!orderId) return { received: true };
 
-  // Enrollment payment
-  const epPayment = await repo.findEnrollmentPaymentByOrderId(orderId);
-  if (epPayment) {
-    if (epPayment.status === 'captured' || epPayment.status === 'failed') return { received: true };
+  // Enrollment (monthly/quarterly/annual class package) payment
+  const enrollmentPayment = await repo.findEnrollmentPaymentByOrderId(orderId);
+  if (enrollmentPayment) {
+    // Idempotency guard: Razorpay retries webhook delivery, so a payment we've already
+    // resolved (captured or failed) must be a no-op, not double-processed.
+    if (enrollmentPayment.status === 'captured' || enrollmentPayment.status === 'failed') return { received: true };
     if (event === 'payment.captured') {
       await prisma.$transaction(async (tx) => {
-        await repo.updateEnrollmentPaymentCaptured(epPayment.id, payloadEntity.id as string, tx);
-        await repo.activateEnrollmentPeriod(epPayment.enrollmentPeriodId, epPayment.enrollmentPeriod.enrollmentId, tx);
+        await repo.updateEnrollmentPaymentCaptured(enrollmentPayment.id, payloadEntity.id as string, tx);
+        await repo.activateEnrollmentPeriod(enrollmentPayment.enrollmentPeriodId, enrollmentPayment.enrollmentPeriod.enrollmentId, tx);
         // S2.4: commission on the enrolment payment (taken from the academy payout).
         await repo.recordCommission({
-          academyId: epPayment.enrollmentPeriod.enrollment.batch.academyId,
+          academyId: enrollmentPayment.enrollmentPeriod.enrollment.batch.academyId,
           itemType: 'enrollment',
-          itemId: epPayment.enrollmentPeriodId,
-          grossPaise: epPayment.amountPaise,
+          itemId: enrollmentPayment.enrollmentPeriodId,
+          grossPaise: enrollmentPayment.amountPaise,
         }, tx);
         // S7: withhold the rolling reserve from this captured revenue.
         await accrueReserveOnCapture({
-          academyId: epPayment.enrollmentPeriod.enrollment.batch.academyId,
-          grossPaise: epPayment.amountPaise,
+          academyId: enrollmentPayment.enrollmentPeriod.enrollment.batch.academyId,
+          grossPaise: enrollmentPayment.amountPaise,
           sourceType: 'enrollment',
-          sourceId: epPayment.enrollmentPeriodId,
+          sourceId: enrollmentPayment.enrollmentPeriodId,
         }, tx);
       });
-      const enrollment = epPayment.enrollmentPeriod.enrollment;
-      const months = ({ monthly: 1, quarterly: 3, annual: 12 } as Record<string, number>)[epPayment.enrollmentPeriod.packageType] ?? 1;
+      const enrollment = enrollmentPayment.enrollmentPeriod.enrollment;
+      const packageMonths = ({ monthly: 1, quarterly: 3, annual: 12 } as Record<string, number>)[enrollmentPayment.enrollmentPeriod.packageType] ?? 1;
       try {
         await sendPushNotifications({
           subjectId: enrollment.userId,
           subjectRole: 'student',
           title: 'Enrollment confirmed',
-          body: `Your ${enrollment.batch.title} enrollment is active for ${months} month${months > 1 ? 's' : ''}.`,
+          body: `Your ${enrollment.batch.title} enrollment is active for ${packageMonths} month${packageMonths > 1 ? 's' : ''}.`,
           data: { screen: 'enrollments' },
         });
       } catch { /* non-fatal */ }
     } else if (event === 'payment.failed') {
-      await repo.updateEnrollmentPaymentFailed(epPayment.id);
-      const enrollment = epPayment.enrollmentPeriod.enrollment;
+      await repo.updateEnrollmentPaymentFailed(enrollmentPayment.id);
+      const enrollment = enrollmentPayment.enrollmentPeriod.enrollment;
       try {
         await sendPushNotifications({
           subjectId: enrollment.userId,

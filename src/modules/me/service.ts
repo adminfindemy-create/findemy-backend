@@ -35,7 +35,7 @@ export async function getSavedAcademies(userId: string) {
       },
     },
   });
-  return { items: rows.map((r) => r.academy) };
+  return { items: rows.map((row) => row.academy) };
 }
 
 export async function isSavedAcademy(userId: string, academyId: string): Promise<boolean> {
@@ -116,20 +116,20 @@ export async function getMyReviews(userId: string) {
     take: 20,
   });
   return {
-    items: reviews.map((r) => ({
-      id: r.id,
-      rating: r.rating,
-      comment: r.comment,
-      created_at: r.createdAt.toISOString(),
-      academy_name: r.academy.name,
-      academy_id: r.academy.id,
-      batch_title: r.batch.title,
+    items: reviews.map((review) => ({
+      id: review.id,
+      rating: review.rating,
+      comment: review.comment,
+      created_at: review.createdAt.toISOString(),
+      academy_name: review.academy.name,
+      academy_id: review.academy.id,
+      batch_title: review.batch.title,
     })),
   };
 }
 
 export async function getMyWorkshopRegistrations(userId: string) {
-  const regs = await (prisma as any).workshopRegistration.findMany({
+  const registrations = await (prisma as any).workshopRegistration.findMany({
     where: { userId, status: 'confirmed' },
     include: {
       workshop: {
@@ -140,39 +140,39 @@ export async function getMyWorkshopRegistrations(userId: string) {
     take: 20,
   });
   return {
-    items: regs.map((r: any) => ({
-      id: r.id,
-      status: r.status,
-      workshop_id: r.workshopId,
-      workshop_title: r.workshop.title,
-      workshop_type: r.workshop.type,
-      start_at: r.workshop.startAt.toISOString(),
-      price_paise: r.workshop.pricePaise,
-      academy_name: r.workshop.academy.name,
-      academy_id: r.workshop.academy.id,
+    items: registrations.map((registration: any) => ({
+      id: registration.id,
+      status: registration.status,
+      workshop_id: registration.workshopId,
+      workshop_title: registration.workshop.title,
+      workshop_type: registration.workshop.type,
+      start_at: registration.workshop.startAt.toISOString(),
+      price_paise: registration.workshop.pricePaise,
+      academy_name: registration.workshop.academy.name,
+      academy_id: registration.workshop.academy.id,
     })),
   };
 }
 
 export async function getMyEventRegistrations(userId: string) {
-  const regs = await (prisma as any).eventRegistration.findMany({
+  const registrations = await (prisma as any).eventRegistration.findMany({
     where: { userId, status: 'confirmed' },
     include: { event: true },
     orderBy: { createdAt: 'desc' },
     take: 20,
   });
   return {
-    items: regs.map((r: any) => ({
-      id: r.id,
-      status: r.status,
-      event_id: r.eventId,
-      event_title: r.event.title,
-      event_type: r.event.type,
-      category: r.event.category,
-      start_at: r.event.startAt.toISOString(),
-      location: r.event.location,
-      price_paise: r.event.pricePaise,
-      organizer_name: r.event.organizerName,
+    items: registrations.map((registration: any) => ({
+      id: registration.id,
+      status: registration.status,
+      event_id: registration.eventId,
+      event_title: registration.event.title,
+      event_type: registration.event.type,
+      category: registration.event.category,
+      start_at: registration.event.startAt.toISOString(),
+      location: registration.event.location,
+      price_paise: registration.event.pricePaise,
+      organizer_name: registration.event.organizerName,
     })),
   };
 }
@@ -187,10 +187,10 @@ export async function getReferralHistory(userId: string) {
 
   return {
     points: user?.referralPoints ?? 0,
-    history: referrals.map((r) => ({
-      id: r.id,
-      referree_name: r.referree?.name ?? 'Someone',
-      claimed_at: r.claimedAt?.toISOString(),
+    history: referrals.map((referral) => ({
+      id: referral.id,
+      referree_name: referral.referree?.name ?? 'Someone',
+      claimed_at: referral.claimedAt?.toISOString(),
     })),
   };
 }

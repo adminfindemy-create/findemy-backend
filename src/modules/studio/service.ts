@@ -11,18 +11,18 @@ export async function getDashboard(academyId: string) {
 export async function getInbox(academyId: string, status?: string) {
   const { items, counts } = await repo.getInboxItems(academyId, status);
   return {
-    items: items.map((t) => ({
-      id: t.id,
-      student_name: t.user.name,
-      student_age: t.user.age,
-      batch_title: t.batch.title,
-      scheduled_at: t.trialAt.toISOString(),
-      status: t.status,
-      student_phone: t.user.phone,
-      level: t.batch.level,
-      category: t.batch.category,
-      coach_name: t.batch.coach?.name,
-      trial_fee_paise: t.batch.trialFeePaise,
+    items: items.map((trial) => ({
+      id: trial.id,
+      student_name: trial.user.name,
+      student_age: trial.user.age,
+      batch_title: trial.batch.title,
+      scheduled_at: trial.trialAt.toISOString(),
+      status: trial.status,
+      student_phone: trial.user.phone,
+      level: trial.batch.level,
+      category: trial.batch.category,
+      coach_name: trial.batch.coach?.name,
+      trial_fee_paise: trial.batch.trialFeePaise,
     })),
     counts,
     next_cursor: null,
@@ -32,42 +32,43 @@ export async function getInbox(academyId: string, status?: string) {
 export async function getActivity(academyId: string) {
   const { attendedTrials, reviews, enrollments, workshopRegs } = await repo.getActivity(academyId);
   const items = [
-    ...attendedTrials.map((t) => ({
-      id: `trial_${t.id}`,
+    ...attendedTrials.map((trial) => ({
+      id: `trial_${trial.id}`,
       kind: 'trial_done' as const,
       icon_tone: 'jade' as const,
-      title: `${t.user.name} completed a trial`,
-      subtitle: t.batch.title,
-      at: (t.attendanceMarkedAt ?? t.trialAt).toISOString(),
-      action: { label: 'Invite to enroll', route: `/students/${t.userId}` },
+      title: `${trial.user.name} completed a trial`,
+      subtitle: trial.batch.title,
+      at: (trial.attendanceMarkedAt ?? trial.trialAt).toISOString(),
+      action: { label: 'Invite to enroll', route: `/students/${trial.userId}` },
     })),
-    ...reviews.map((r) => ({
-      id: `review_${r.id}`,
+    ...reviews.map((review) => ({
+      id: `review_${review.id}`,
       kind: 'review' as const,
       icon_tone: 'marigold' as const,
-      title: `${r.user.name} left a ${r.rating}★ review`,
-      subtitle: r.comment ?? undefined,
-      at: r.createdAt.toISOString(),
-      action: r.response ? undefined : { label: 'Respond', route: `/reviews/${r.id}/respond` },
+      title: `${review.user.name} left a ${review.rating}★ review`,
+      subtitle: review.comment ?? undefined,
+      at: review.createdAt.toISOString(),
+      action: review.response ? undefined : { label: 'Respond', route: `/reviews/${review.id}/respond` },
     })),
-    ...enrollments.map((e) => ({
-      id: `enroll_${e.id}`,
+    ...enrollments.map((enrollment) => ({
+      id: `enroll_${enrollment.id}`,
       kind: 'enrollment' as const,
       icon_tone: 'persimmon' as const,
-      title: `${e.user.name} enrolled`,
-      subtitle: e.batch.title,
-      at: e.startedAt.toISOString(),
+      title: `${enrollment.user.name} enrolled`,
+      subtitle: enrollment.batch.title,
+      at: enrollment.startedAt.toISOString(),
     })),
-    ...workshopRegs.map((w) => ({
-      id: `wsreg_${w.id}`,
+    ...workshopRegs.map((registration) => ({
+      id: `wsreg_${registration.id}`,
       kind: 'workshop_reg' as const,
       icon_tone: 'rose' as const,
-      title: `${w.user.name} registered for a workshop`,
-      subtitle: w.workshop.title,
-      at: w.createdAt.toISOString(),
+      title: `${registration.user.name} registered for a workshop`,
+      subtitle: registration.workshop.title,
+      at: registration.createdAt.toISOString(),
     })),
   ];
-  items.sort((a, b) => (a.at < b.at ? 1 : -1));
+  // Most-recent-first across all activity kinds merged together.
+  items.sort((itemA, itemB) => (itemA.at < itemB.at ? 1 : -1));
   return { items: items.slice(0, 15) };
 }
 
@@ -118,27 +119,27 @@ export async function getSchedule(academyId: string, weekStart?: string) {
 export async function getBatches(academyId: string) {
   const batches = await repo.getBatches(academyId);
   return {
-    items: batches.map((b) => ({
-      id: b.id,
-      title: b.title,
-      category: b.category,
-      level: b.level,
-      description: b.description ?? null,
-      things_to_know: b.thingsToKnow ?? [],
-      capacity: b.capacity,
-      trial_fee_paise: b.trialFeePaise,
-      monthly_fee_paise: b.monthlyFeePaise,
-      quarterly_discount_bps: b.quarterlyDiscountBps,
-      annual_discount_bps: b.annualDiscountBps,
-      sessions_per_month: b.sessionsPerMonth,
-      status: b.status,
-      mode: toWireMode(b.mode),
-      trial_spots: Math.max(0, b.capacity - b._count.enrollments),
-      coach_name: b.coach.name,
-      timings: b.timings.map((t) => ({
-        day_of_week: t.dayOfWeek,
-        start_time: t.startTime,
-        duration_min: t.durationMin,
+    items: batches.map((batch) => ({
+      id: batch.id,
+      title: batch.title,
+      category: batch.category,
+      level: batch.level,
+      description: batch.description ?? null,
+      things_to_know: batch.thingsToKnow ?? [],
+      capacity: batch.capacity,
+      trial_fee_paise: batch.trialFeePaise,
+      monthly_fee_paise: batch.monthlyFeePaise,
+      quarterly_discount_bps: batch.quarterlyDiscountBps,
+      annual_discount_bps: batch.annualDiscountBps,
+      sessions_per_month: batch.sessionsPerMonth,
+      status: batch.status,
+      mode: toWireMode(batch.mode),
+      trial_spots: Math.max(0, batch.capacity - batch._count.enrollments),
+      coach_name: batch.coach.name,
+      timings: batch.timings.map((timing) => ({
+        day_of_week: timing.dayOfWeek,
+        start_time: timing.startTime,
+        duration_min: timing.durationMin,
       })),
     })),
   };
@@ -166,10 +167,10 @@ export async function getBatch(id: string, academyId: string) {
       trial_spots: Math.max(0, batch.capacity - batch._count.enrollments),
       coach_id: batch.coachId,
       coach_name: batch.coach.name,
-      timings: batch.timings.map((t) => ({
-        day_of_week: t.dayOfWeek,
-        start_time: t.startTime,
-        duration_min: t.durationMin,
+      timings: batch.timings.map((timing) => ({
+        day_of_week: timing.dayOfWeek,
+        start_time: timing.startTime,
+        duration_min: timing.durationMin,
       })),
     },
   };
@@ -221,7 +222,7 @@ export async function createBatch(
   if (data.timings) {
     await repo.replaceBatchTimings(
       batch.id,
-      data.timings.map((t) => ({ dayOfWeek: t.day_of_week, startTime: t.start_time, durationMin: t.duration_min })),
+      data.timings.map((timing) => ({ dayOfWeek: timing.day_of_week, startTime: timing.start_time, durationMin: timing.duration_min })),
     );
   }
   return { batch: { id: batch.id } };
@@ -272,7 +273,7 @@ export async function updateBatch(
   if (data.timings !== undefined) {
     await repo.replaceBatchTimings(
       id,
-      data.timings.map((t) => ({ dayOfWeek: t.day_of_week, startTime: t.start_time, durationMin: t.duration_min })),
+      data.timings.map((timing) => ({ dayOfWeek: timing.day_of_week, startTime: timing.start_time, durationMin: timing.duration_min })),
     );
   }
   return { batch: { id } };
@@ -285,28 +286,28 @@ export async function deleteBatch(id: string, academyId: string) {
 
 // --- Programs (academy-authored offerings that own batches) ---
 
-function toStudioBatch(b: any) {
+function toStudioBatch(batch: any) {
   return {
-    id: b.id,
-    program_id: b.programId,
-    title: b.title,
-    category: b.category,
-    level: b.level,
-    capacity: b.capacity,
-    trial_fee_paise: b.trialFeePaise,
-    monthly_fee_paise: b.monthlyFeePaise,
-    quarterly_discount_bps: b.quarterlyDiscountBps,
-    annual_discount_bps: b.annualDiscountBps,
-    sessions_per_month: b.sessionsPerMonth,
-    status: b.status,
-    mode: toWireMode(b.mode),
-    trial_spots: Math.max(0, b.capacity - b._count.enrollments),
-    coach_id: b.coachId,
-    coach_name: b.coach?.name ?? null,
-    timings: (b.timings ?? []).map((t: any) => ({
-      day_of_week: t.dayOfWeek,
-      start_time: t.startTime,
-      duration_min: t.durationMin,
+    id: batch.id,
+    program_id: batch.programId,
+    title: batch.title,
+    category: batch.category,
+    level: batch.level,
+    capacity: batch.capacity,
+    trial_fee_paise: batch.trialFeePaise,
+    monthly_fee_paise: batch.monthlyFeePaise,
+    quarterly_discount_bps: batch.quarterlyDiscountBps,
+    annual_discount_bps: batch.annualDiscountBps,
+    sessions_per_month: batch.sessionsPerMonth,
+    status: batch.status,
+    mode: toWireMode(batch.mode),
+    trial_spots: Math.max(0, batch.capacity - batch._count.enrollments),
+    coach_id: batch.coachId,
+    coach_name: batch.coach?.name ?? null,
+    timings: (batch.timings ?? []).map((timing: any) => ({
+      day_of_week: timing.dayOfWeek,
+      start_time: timing.startTime,
+      duration_min: timing.durationMin,
     })),
   };
 }
@@ -314,15 +315,15 @@ function toStudioBatch(b: any) {
 export async function getPrograms(academyId: string) {
   const programs = await repo.getPrograms(academyId);
   return {
-    items: programs.map((p) => ({
-      id: p.id,
-      title: p.title,
-      category: p.category,
-      description: p.description ?? null,
-      things_to_know: p.thingsToKnow ?? [],
-      batch_count: p._count.batches,
-      cover_url: (p as any).media?.[0]?.url ?? null,
-      created_at: p.createdAt.toISOString(),
+    items: programs.map((program) => ({
+      id: program.id,
+      title: program.title,
+      category: program.category,
+      description: program.description ?? null,
+      things_to_know: program.thingsToKnow ?? [],
+      batch_count: program._count.batches,
+      cover_url: (program as any).media?.[0]?.url ?? null,
+      created_at: program.createdAt.toISOString(),
     })),
   };
 }
@@ -337,7 +338,7 @@ export async function getProgramDetail(id: string, academyId: string) {
       category: program.category,
       description: program.description ?? null,
       things_to_know: program.thingsToKnow ?? [],
-      media: (program as any).media?.map((m: any) => ({ url: m.url, type: m.type })) ?? [],
+      media: (program as any).media?.map((mediaItem: any) => ({ url: mediaItem.url, type: mediaItem.type })) ?? [],
       created_at: program.createdAt.toISOString(),
     },
     batches: program.batches.map(toStudioBatch),
@@ -389,24 +390,24 @@ export async function getStudents(
   attendanceTier?: 'active' | 'irregular' | 'inactive',
 ) {
   const enrollments = await repo.getStudents(academyId, q, 20, batchId, attendanceTier);
-  const userMap = new Map();
-  for (const e of enrollments) {
-    if (!userMap.has(e.userId)) {
-      userMap.set(e.userId, {
-        id: e.userId,
-        name: e.user.name,
-        phone: e.user.phone,
-        age: e.user.age,
+  const studentByUserId = new Map();
+  for (const enrollment of enrollments) {
+    if (!studentByUserId.has(enrollment.userId)) {
+      studentByUserId.set(enrollment.userId, {
+        id: enrollment.userId,
+        name: enrollment.user.name,
+        phone: enrollment.user.phone,
+        age: enrollment.user.age,
         batches: [],
         // S4.1: % + tier for the (filtered) batch — the first enrolment row carries it.
-        attendance_pct: e.attendance_pct,
-        tier: e.tier,
+        attendance_pct: enrollment.attendance_pct,
+        tier: enrollment.tier,
         status: 'active',
       });
     }
-    userMap.get(e.userId).batches.push({ title: e.batch.title, category: e.batch.category });
+    studentByUserId.get(enrollment.userId).batches.push({ title: enrollment.batch.title, category: enrollment.batch.category });
   }
-  return { items: Array.from(userMap.values()), next_cursor: null };
+  return { items: Array.from(studentByUserId.values()), next_cursor: null };
 }
 
 export async function getStudent(userId: string, academyId: string) {
@@ -417,10 +418,10 @@ export async function getStudent(userId: string, academyId: string) {
   const now = new Date();
   let totalPresent = 0;
   let totalExpected = 0;
-  for (const e of enrollments) {
-    if (e.status !== 'active') continue;
-    totalPresent += attendance.filter((a) => a.batchId === e.batchId && a.present).length;
-    totalExpected += expectedSessions(e.batch.sessionsPerMonth, e.startedAt, now);
+  for (const enrollment of enrollments) {
+    if (enrollment.status !== 'active') continue;
+    totalPresent += attendance.filter((record) => record.batchId === enrollment.batchId && record.present).length;
+    totalExpected += expectedSessions(enrollment.batch.sessionsPerMonth, enrollment.startedAt, now);
   }
   const overallPct = attendancePct(totalPresent, totalExpected);
 
@@ -435,26 +436,26 @@ export async function getStudent(userId: string, academyId: string) {
       tier: tierOf(overallPct),
       status: 'active',
     },
-    enrollments: enrollments.map((e) => ({
-      id: e.id,
-      batch_id: e.batchId,
-      batch_title: e.batch.title,
-      category: e.batch.category,
-      monthly_fee_paise: e.batch.monthlyFeePaise,
-      started_at: e.startedAt.toISOString(),
-      current_period_end: e.periods[0]?.endDate?.toISOString(),
-      status: e.status,
+    enrollments: enrollments.map((enrollment) => ({
+      id: enrollment.id,
+      batch_id: enrollment.batchId,
+      batch_title: enrollment.batch.title,
+      category: enrollment.batch.category,
+      monthly_fee_paise: enrollment.batch.monthlyFeePaise,
+      started_at: enrollment.startedAt.toISOString(),
+      current_period_end: enrollment.periods[0]?.endDate?.toISOString(),
+      status: enrollment.status,
     })),
-    trial_history: trials.map((t) => ({
-      id: t.id,
-      batch_title: t.batch.title,
-      status: t.status,
-      trial_at: t.trialAt.toISOString(),
+    trial_history: trials.map((trial) => ({
+      id: trial.id,
+      batch_title: trial.batch.title,
+      status: trial.status,
+      trial_at: trial.trialAt.toISOString(),
     })),
-    attendance_history: attendance.map((a) => ({
-      date: a.date.toISOString().slice(0, 10),
-      batch_title: a.batch.title,
-      present: a.present,
+    attendance_history: attendance.map((record) => ({
+      date: record.date.toISOString().slice(0, 10),
+      batch_title: record.batch.title,
+      present: record.present,
     })),
   };
 }
@@ -473,20 +474,20 @@ export async function getReviews(
     repo.getReviewsSummary(academyId),
   ]);
   const sessionCounts = await repo.getAttendanceCountsFor(
-    reviews.map((r) => ({ userId: r.userId, batchId: r.batchId })),
+    reviews.map((review) => ({ userId: review.userId, batchId: review.batchId })),
   );
   return {
-    items: reviews.map((r) => ({
-      id: r.id,
-      student_name: r.user.name,
-      rating: r.rating,
-      comment: r.comment,
-      response: r.response,
-      created_at: r.createdAt.toISOString(),
-      responded_at: r.respondedAt?.toISOString(),
-      batch_title: r.batch.title,
-      session_count: sessionCounts.get(`${r.userId}:${r.batchId}`) ?? 0,
-      flagged: r.rating <= 3 && !r.response,
+    items: reviews.map((review) => ({
+      id: review.id,
+      student_name: review.user.name,
+      rating: review.rating,
+      comment: review.comment,
+      response: review.response,
+      created_at: review.createdAt.toISOString(),
+      responded_at: review.respondedAt?.toISOString(),
+      batch_title: review.batch.title,
+      session_count: sessionCounts.get(`${review.userId}:${review.batchId}`) ?? 0,
+      flagged: review.rating <= 3 && !review.response,
     })),
     summary,
     next_cursor: null,

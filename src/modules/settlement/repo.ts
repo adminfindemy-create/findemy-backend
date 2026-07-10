@@ -76,7 +76,7 @@ export async function releaseMaturedReserve(now: Date) {
   });
   if (matured.length === 0) return 0;
   await prisma.reserveHold.updateMany({
-    where: { id: { in: matured.map((m) => m.id) } },
+    where: { id: { in: matured.map((hold) => hold.id) } },
     data: { status: 'released' },
   });
   return matured.length;

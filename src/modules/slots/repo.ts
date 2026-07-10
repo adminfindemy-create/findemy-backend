@@ -26,7 +26,7 @@ export async function findExistingSlotMillis(
     where: { batchId, slotTime: { in: candidates } },
     select: { slotTime: true },
   });
-  return new Set(rows.map((r) => r.slotTime.getTime()));
+  return new Set(rows.map((row) => row.slotTime.getTime()));
 }
 
 export async function findSlot(id: string, academyId: string) {
@@ -49,5 +49,5 @@ export async function getSlotBookedUserIds(slotId: string): Promise<string[]> {
     where: { slotId, status: { in: ['initiated', 'confirmed'] } },
     select: { userId: true },
   });
-  return [...new Set(bookings.map((b) => b.userId))];
+  return [...new Set(bookings.map((booking) => booking.userId))];
 }

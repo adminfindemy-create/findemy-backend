@@ -40,7 +40,7 @@ export async function getActiveEnrolledUserIds(batchId: string): Promise<string[
     where: { batchId, status: 'active' },
     select: { userId: true },
   });
-  return rows.map((r) => r.userId);
+  return rows.map((row) => row.userId);
 }
 
 // Booked, still-upcoming trials on the batch — cancelled when the batch is discontinued.
@@ -53,11 +53,11 @@ export async function cancelBookedFutureTrials(batchId: string, now: Date) {
   if (trials.length === 0) return [];
   await prisma.$transaction([
     prisma.trial.updateMany({
-      where: { id: { in: trials.map((t) => t.id) } },
+      where: { id: { in: trials.map((trial) => trial.id) } },
       data: { status: 'cancelled' },
     }),
     prisma.booking.updateMany({
-      where: { id: { in: trials.map((t) => t.bookingId).filter((b): b is string => !!b) } },
+      where: { id: { in: trials.map((trial) => trial.bookingId).filter((bookingId): bookingId is string => !!bookingId) } },
       data: { status: 'cancelled', cancelledAt: now },
     }),
   ]);

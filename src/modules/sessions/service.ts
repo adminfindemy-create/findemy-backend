@@ -20,10 +20,10 @@ export async function cancelSession(academyId: string, batchId: string, sessionD
   const sessionDate = new Date(`${sessionDateStr}T00:00:00.000Z`);
   if (Number.isNaN(sessionDate.getTime())) throw new AppError('VALIDATION', 400, 'Invalid session date');
   const dow = sessionDate.getUTCDay();
-  const timing = batch.timings.find((t) => t.dayOfWeek === dow);
+  const timing = batch.timings.find((batchTiming) => batchTiming.dayOfWeek === dow);
   if (!timing) throw new AppError('VALIDATION', 400, 'No class scheduled on that day');
-  const [hh, mm] = timing.startTime.split(':').map(Number);
-  const sessionStart = istWallClockToUtc(sessionDateStr, hh, mm);
+  const [hour, minute] = timing.startTime.split(':').map(Number);
+  const sessionStart = istWallClockToUtc(sessionDateStr, hour, minute);
   if (sessionStart <= new Date()) {
     throw new AppError('VALIDATION', 400, 'Only a future session can be cancelled');
   }
@@ -52,23 +52,23 @@ export async function cancelSession(academyId: string, batchId: string, sessionD
 
     const now = new Date();
     const recipients = enrollments.filter(
-      (e) => e.status === 'active' && (!e.pausedUntil || e.pausedUntil < now) && e.periods.length > 0,
+      (enrollment) => enrollment.status === 'active' && (!enrollment.pausedUntil || enrollment.pausedUntil < now) && enrollment.periods.length > 0,
     );
 
-    for (const e of recipients) {
-      const period = e.periods[0];
+    for (const enrollment of recipients) {
+      const period = enrollment.periods[0];
       await tx.sessionCredit.create({
-        data: { enrollmentId: e.id, batchId, reason: 'class_cancelled' },
+        data: { enrollmentId: enrollment.id, batchId, reason: 'class_cancelled' },
       });
       // Extend to the NEXT real class after the current endDate → exactly one make-good session.
-      const next = nextTimingOccurrenceAfter(period.endDate, batch.timings);
-      if (next) {
-        const delta = next.getTime() - period.endDate.getTime();
-        const newGrace = period.gracePeriodEnd ? new Date(period.gracePeriodEnd.getTime() + delta) : next;
-        await extendPeriodEndDate(period.id, next, newGrace, tx);
+      const nextOccurrence = nextTimingOccurrenceAfter(period.endDate, batch.timings);
+      if (nextOccurrence) {
+        const delta = nextOccurrence.getTime() - period.endDate.getTime();
+        const newGracePeriodEnd = period.gracePeriodEnd ? new Date(period.gracePeriodEnd.getTime() + delta) : nextOccurrence;
+        await extendPeriodEndDate(period.id, nextOccurrence, newGracePeriodEnd, tx);
       }
     }
-    return recipients.map((e) => e.userId);
+    return recipients.map((enrollment) => enrollment.userId);
   });
 
   // Notify outside the transaction (best-effort).

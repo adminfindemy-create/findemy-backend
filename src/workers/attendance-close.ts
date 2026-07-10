@@ -10,9 +10,9 @@ export async function closeMissedTrials() {
   });
 
   let closed = 0;
-  for (const t of trials) {
+  for (const trial of trials) {
     await prisma.trial.update({
-      where: { id: t.id },
+      where: { id: trial.id },
       data: { status: 'missed' },
     });
     closed++;

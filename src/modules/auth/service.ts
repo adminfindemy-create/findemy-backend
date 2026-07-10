@@ -381,39 +381,42 @@ export async function refresh({
   refreshToken: string;
 }) {
   const tokenHash = hashToken(refreshToken);
-  const rt = await repo.findRefreshTokenByHash(tokenHash);
+  const storedRefreshToken = await repo.findRefreshTokenByHash(tokenHash);
 
-  // Replay detection: if token is already revoked, assume compromise and revoke all
-  if (rt && rt.revokedAt) {
+  // Replay detection: a refresh token is single-use (rotated on every call). If someone
+  // presents one that's already been revoked, either the legitimate owner rotated past it
+  // (client retried) or an attacker stole an old token — we can't tell which, so we
+  // conservatively assume compromise and kill every session for this subject.
+  if (storedRefreshToken && storedRefreshToken.revokedAt) {
     await repo.revokeAllRefreshTokensForSubject(
-      rt.subjectId,
-      rt.subjectRole as 'student' | 'academy',
+      storedRefreshToken.subjectId,
+      storedRefreshToken.subjectRole as 'student' | 'academy',
     );
     throw new AppError('UNAUTHORIZED', 401, 'Token replay detected');
   }
 
-  if (!rt || rt.expiresAt < new Date()) {
+  if (!storedRefreshToken || storedRefreshToken.expiresAt < new Date()) {
     throw new AppError('UNAUTHORIZED', 401, 'Invalid refresh token');
   }
 
   await repo.revokeRefreshTokenByHash(tokenHash);
 
-  const newRaw = generateRefreshToken();
-  const newHash = hashToken(newRaw);
-  const newExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const newRawRefreshToken = generateRefreshToken();
+  const newTokenHash = hashToken(newRawRefreshToken);
+  const newExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
   await repo.createRefreshToken({
     id: newId(),
-    subjectId: rt.subjectId,
-    subjectRole: rt.subjectRole as 'student' | 'academy',
-    tokenHash: newHash,
-    expiresAt: newExpires,
+    subjectId: storedRefreshToken.subjectId,
+    subjectRole: storedRefreshToken.subjectRole as 'student' | 'academy',
+    tokenHash: newTokenHash,
+    expiresAt: newExpiresAt,
   });
 
   let academyId: string | undefined;
-  if (rt.subjectRole === 'academy') {
+  if (storedRefreshToken.subjectRole === 'academy') {
     const account = await prisma.academyAccount.findUnique({
-      where: { id: rt.subjectId },
+      where: { id: storedRefreshToken.subjectId },
     });
     // academyId is String? in Prisma; coalesce null to undefined to match
     // the `string | undefined` target (treated identically downstream).
@@ -421,12 +424,12 @@ export async function refresh({
   }
 
   const accessToken = await signAccessToken({
-    sub: rt.subjectId,
-    role: rt.subjectRole,
+    sub: storedRefreshToken.subjectId,
+    role: storedRefreshToken.subjectRole,
     academy_id: academyId,
   });
 
-  return { access_token: accessToken, refresh_token: newRaw };
+  return { access_token: accessToken, refresh_token: newRawRefreshToken };
 }
 
 export async function logout({
@@ -439,23 +442,25 @@ export async function logout({
 }
 
 export async function getMe({ userId }: { userId: string }) {
-  const u = await prisma.user.findUnique({ where: { id: userId } });
-  if (!u) throw new AppError('NOT_FOUND', 404, 'User not found');
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new AppError('NOT_FOUND', 404, 'User not found');
   return {
     user: {
-      id: u.id,
-      phone: u.phone,
-      name: u.name,
-      age: u.age,
-      location: u.location,
-      lat: u.lat,
-      lng: u.lng,
-      interests: u.interests,
-      avatar_initial: u.avatarInitial,
-      created_at: u.createdAt.toISOString(),
-      last_active_at: u.lastActiveAt.toISOString(),
+      id: user.id,
+      phone: user.phone,
+      name: user.name,
+      age: user.age,
+      location: user.location,
+      lat: user.lat,
+      lng: user.lng,
+      interests: user.interests,
+      avatar_initial: user.avatarInitial,
+      created_at: user.createdAt.toISOString(),
+      last_active_at: user.lastActiveAt.toISOString(),
     },
-    attendance_otp: u.attendanceOtp,
+    // Each student has a standing 4-digit code an academy coach enters to mark
+    // them present at a trial/class, independent of the OTP login flow above.
+    attendance_otp: user.attendanceOtp,
   };
 }
 

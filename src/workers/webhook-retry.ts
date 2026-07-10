@@ -11,16 +11,16 @@ export async function retryFailedWebhooks() {
   });
 
   let retried = 0;
-  for (const p of stale) {
-    await prisma.payment.update({ where: { id: p.id }, data: { status: 'failed' } });
+  for (const payment of stale) {
+    await prisma.payment.update({ where: { id: payment.id }, data: { status: 'failed' } });
     await prisma.booking.update({
-      where: { id: p.bookingId },
+      where: { id: payment.bookingId },
       data: { status: 'cancelled', cancelledAt: new Date() },
     });
     // S2.1: legacy slot release only if the booking had a slot (slots retired).
-    if (p.booking.slotId) {
+    if (payment.booking.slotId) {
       await prisma.slot.update({
-        where: { id: p.booking.slotId },
+        where: { id: payment.booking.slotId },
         data: { reservedCount: { decrement: 1 } },
       });
     }

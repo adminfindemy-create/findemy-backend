@@ -10,16 +10,16 @@ export async function releaseExpiredReservations() {
   });
 
   let released = 0;
-  for (const b of expired) {
+  for (const booking of expired) {
     // Cancel the expired unpaid reservation. S2.1: only touch a slot for legacy
     // bookings that still have one (trial booking is off capacity now — no slots).
     await prisma.booking.update({
-      where: { id: b.id },
+      where: { id: booking.id },
       data: { status: 'cancelled', cancelledAt: new Date() },
     });
-    if (b.slotId) {
+    if (booking.slotId) {
       await prisma.slot.update({
-        where: { id: b.slotId },
+        where: { id: booking.slotId },
         data: { reservedCount: { decrement: 1 } },
       });
     }

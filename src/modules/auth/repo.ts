@@ -331,11 +331,11 @@ export async function findMyEnrollments(userId: string) {
   });
 
   const withAttended = await Promise.all(
-    rows.map(async (e) => {
+    rows.map(async (enrollment) => {
       const attended = await prisma.trial.count({
-        where: { userId, batchId: e.batchId, status: 'attended' },
+        where: { userId, batchId: enrollment.batchId, status: 'attended' },
       });
-      return { ...e, attended_count: attended };
+      return { ...enrollment, attended_count: attended };
     }),
   );
   return withAttended;
@@ -367,11 +367,11 @@ export async function findMyClasses(userId: string) {
   });
 
   return Promise.all(
-    rows.map(async (e) => {
+    rows.map(async (enrollment) => {
       const attended = await prisma.batchAttendance.count({
-        where: { userId, batchId: e.batchId, present: true },
+        where: { userId, batchId: enrollment.batchId, present: true },
       });
-      return { ...e, attended_count: attended };
+      return { ...enrollment, attended_count: attended };
     }),
   );
 }

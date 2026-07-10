@@ -1,11 +1,11 @@
 export type CursorPayload = { id: string; ts: string };
 
-export const encodeCursor = (p: CursorPayload): string =>
-  Buffer.from(JSON.stringify(p)).toString('base64url');
+export const encodeCursor = (payload: CursorPayload): string =>
+  Buffer.from(JSON.stringify(payload)).toString('base64url');
 
-export const decodeCursor = (c: string): CursorPayload | null => {
+export const decodeCursor = (cursor: string): CursorPayload | null => {
   try {
-    const parsed = JSON.parse(Buffer.from(c, 'base64url').toString('utf-8'));
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8'));
     if (
       typeof parsed === 'object' &&
       parsed !== null &&

@@ -35,12 +35,12 @@ export async function createReview(
   } else {
     // Eligibility: the user is/was enrolled in this specific batch at this academy.
     if (!data.academy_id || !data.batch_id) throw new AppError('VALIDATION', 400, 'academy_id and batch_id are required');
-    const enr = await prisma.enrollment.findFirst({
+    const enrollment = await prisma.enrollment.findFirst({
       where: { userId, batchId: data.batch_id, batch: { academyId: data.academy_id } },
       select: { id: true },
     });
-    if (!enr) throw new AppError('NOT_ELIGIBLE', 403, 'You can review only a batch you are enrolled in.');
-    enrollmentId = enr.id;
+    if (!enrollment) throw new AppError('NOT_ELIGIBLE', 403, 'You can review only a batch you are enrolled in.');
+    enrollmentId = enrollment.id;
     academyId = data.academy_id;
     batchId = data.batch_id;
   }
@@ -60,10 +60,10 @@ export async function createReview(
         comment: data.comment,
       },
     });
-  } catch (e: any) {
+  } catch (error: any) {
     // @@unique([userId, academyId]) → one review per academy from either path.
-    if (e?.code === 'P2002') throw new AppError('ALREADY_REVIEWED', 409, 'You have already reviewed this academy.');
-    throw e;
+    if (error?.code === 'P2002') throw new AppError('ALREADY_REVIEWED', 409, 'You have already reviewed this academy.');
+    throw error;
   }
 
   // Recompute academy rating + count from the FULL set — keeps the (cached) student-facing
@@ -72,20 +72,20 @@ export async function createReview(
     where: { academyId },
     select: { rating: true },
   });
-  const avg = allReviews.reduce((s, r) => s + r.rating, 0) / allReviews.length;
+  const averageRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
   await prisma.academy.update({
     where: { id: academyId },
-    data: { rating: avg, ratingCount: allReviews.length },
+    data: { rating: averageRating, ratingCount: allReviews.length },
   });
 
   // S5.2: notify the academy of the new review (subjectId = academyId; push service resolves it).
   try {
-    const u = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+    const reviewer = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
     await sendPushNotifications({
       subjectId: academyId,
       subjectRole: 'academy',
       title: 'New review',
-      body: `${u?.name ?? 'A student'} left a ${data.rating}★ review`,
+      body: `${reviewer?.name ?? 'A student'} left a ${data.rating}★ review`,
       data: { screen: 'reviews' },
     });
   } catch {
@@ -110,14 +110,14 @@ export async function getStudioReviews(academyId: string) {
     include: { user: { select: { name: true } }, batch: { select: { title: true } } },
   });
   return {
-    items: reviews.map((r) => ({
-      id: r.id,
-      student_name: r.user.name,
-      rating: r.rating,
-      comment: r.comment,
-      response: r.response,
-      created_at: r.createdAt.toISOString(),
-      batch_title: r.batch.title,
+    items: reviews.map((review) => ({
+      id: review.id,
+      student_name: review.user.name,
+      rating: review.rating,
+      comment: review.comment,
+      response: review.response,
+      created_at: review.createdAt.toISOString(),
+      batch_title: review.batch.title,
     })),
     next_cursor: null,
   };

@@ -27,11 +27,11 @@ export async function findLiveBatch(batchId: string) {
   const dow = ist.getUTCDay();
   const minutesNow = ist.getUTCHours() * 60 + ist.getUTCMinutes();
 
-  const live = batch.timings.some((t) => {
-    if (t.dayOfWeek !== dow) return false;
-    const [h, m] = t.startTime.split(':').map(Number);
-    const start = h * 60 + m;
-    return minutesNow >= start - LIVE_PRE_WINDOW_MIN && minutesNow <= start + t.durationMin;
+  const live = batch.timings.some((timing) => {
+    if (timing.dayOfWeek !== dow) return false;
+    const [hour, minute] = timing.startTime.split(':').map(Number);
+    const start = hour * 60 + minute;
+    return minutesNow >= start - LIVE_PRE_WINDOW_MIN && minutesNow <= start + timing.durationMin;
   });
   return live ? batch : null;
 }

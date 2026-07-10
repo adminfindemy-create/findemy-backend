@@ -75,8 +75,8 @@ export async function searchAcademies(args: {
     include: { batches: { select: { trialFeePaise: true, monthlyFeePaise: true } } },
   });
 
-  return academies.map((a) => ({
-    ...a,
+  return academies.map((academy) => ({
+    ...academy,
     distance_km: null as number | null,
   }));
 }

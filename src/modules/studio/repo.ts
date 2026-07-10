@@ -89,13 +89,13 @@ export async function getDashboardStats(academyId: string) {
       last_month_net_paise: lastMonthGross - lastMonthComm,
     },
     students_count: studentsCount,
-    recent_reviews: recentReviews.map((r) => ({
-      id: r.id,
-      student_name: r.user.name,
-      rating: r.rating,
-      comment: r.comment,
-      response: r.response,
-      created_at: r.createdAt.toISOString(),
+    recent_reviews: recentReviews.map((review) => ({
+      id: review.id,
+      student_name: review.user.name,
+      rating: review.rating,
+      comment: review.comment,
+      response: review.response,
+      created_at: review.createdAt.toISOString(),
     })),
   };
 }
@@ -201,35 +201,35 @@ export async function getSchedule(academyId: string, weekStart: Date) {
     }),
   ]);
 
-  const cancelledSet = new Set(cancelled.map((c) => `${c.batchId}:${istDateKey(c.sessionDate)}`));
+  const cancelledSet = new Set(cancelled.map((cancelledSession) => `${cancelledSession.batchId}:${istDateKey(cancelledSession.sessionDate)}`));
   const now = new Date();
   const days: Record<string, any[]> = {};
 
-  for (let d = 0; d < 7; d++) {
-    const dateStr = istDateKey(new Date(weekStart.getTime() + d * 86400000));
+  for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+    const dateStr = istDateKey(new Date(weekStart.getTime() + dayOffset * 86400000));
     const dow = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
-    for (const b of batches) {
-      for (const t of b.timings) {
-        if (t.dayOfWeek !== dow) continue;
-        const [hh, mm] = t.startTime.split(':').map(Number);
-        const start = istWallClockToUtc(dateStr, hh, mm);
-        const end = new Date(start.getTime() + t.durationMin * 60_000);
+    for (const batch of batches) {
+      for (const timing of batch.timings) {
+        if (timing.dayOfWeek !== dow) continue;
+        const [hour, minute] = timing.startTime.split(':').map(Number);
+        const start = istWallClockToUtc(dateStr, hour, minute);
+        const end = new Date(start.getTime() + timing.durationMin * 60_000);
         let status: string;
-        if (cancelledSet.has(`${b.id}:${dateStr}`)) status = 'cancelled';
+        if (cancelledSet.has(`${batch.id}:${dateStr}`)) status = 'cancelled';
         else if (now >= start && now <= end) status = 'now';
         else if (now < start) status = 'upcoming';
         else status = 'done';
 
         if (!days[dateStr]) days[dateStr] = [];
         days[dateStr].push({
-          batch_id: b.id,
+          batch_id: batch.id,
           session_date: dateStr,
-          batch_title: b.title,
-          category: b.category,
-          capacity: b.capacity,
-          enrolled_count: b._count.enrollments,
-          coach_name: b.coach?.name ?? null,
-          mode: toWireMode(b.mode),
+          batch_title: batch.title,
+          category: batch.category,
+          capacity: batch.capacity,
+          enrolled_count: batch._count.enrollments,
+          coach_name: batch.coach?.name ?? null,
+          mode: toWireMode(batch.mode),
           start_time: start.toISOString(),
           end_time: end.toISOString(),
           status,
@@ -239,8 +239,8 @@ export async function getSchedule(academyId: string, weekStart: Date) {
   }
 
   return Object.entries(days)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, items]) => ({ date, items: items.sort((x, y) => x.start_time.localeCompare(y.start_time)) }));
+    .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+    .map(([date, items]) => ({ date, items: items.sort((itemA, itemB) => itemA.start_time.localeCompare(itemB.start_time)) }));
 }
 
 // S1.3: include active-enrollment count so the serializer can derive trialSpots = capacity − enrolled.
@@ -429,21 +429,21 @@ export async function getStudents(
   // S4.1: present counts per (user, batch) — scoped to the relevant batch(es), not all batches.
   const present = await prisma.batchAttendance.groupBy({
     by: ['userId', 'batchId'],
-    where: { present: true, batch: batchWhere, userId: { in: enrollments.map((e) => e.userId) } },
+    where: { present: true, batch: batchWhere, userId: { in: enrollments.map((enrollment) => enrollment.userId) } },
     _count: true,
   });
   const presentMap = new Map<string, number>();
-  for (const p of present) presentMap.set(`${p.userId}:${p.batchId}`, p._count);
+  for (const row of present) presentMap.set(`${row.userId}:${row.batchId}`, row._count);
 
   // % = present / EXPECTED (sessionsPerMonth × months enrolled); tier from one shared helper.
   const now = new Date();
-  const withTier = enrollments.map((e) => {
-    const presentN = presentMap.get(`${e.userId}:${e.batchId}`) ?? 0;
-    const pct = attendancePct(presentN, expectedSessions(e.batch.sessionsPerMonth, e.startedAt, now));
-    return { ...e, attendance_pct: pct, tier: tierOf(pct) };
+  const withTier = enrollments.map((enrollment) => {
+    const presentCount = presentMap.get(`${enrollment.userId}:${enrollment.batchId}`) ?? 0;
+    const pct = attendancePct(presentCount, expectedSessions(enrollment.batch.sessionsPerMonth, enrollment.startedAt, now));
+    return { ...enrollment, attendance_pct: pct, tier: tierOf(pct) };
   });
 
-  const filtered = attendanceTier ? withTier.filter((e) => e.tier === attendanceTier) : withTier;
+  const filtered = attendanceTier ? withTier.filter((enrollment) => enrollment.tier === attendanceTier) : withTier;
   return filtered.slice(0, limit);
 }
 
@@ -456,14 +456,14 @@ export async function getBatchStudents(batchId: string, academyId: string) {
     },
   });
 
-  const userIds = enrollments.map((e) => e.userId);
+  const userIds = enrollments.map((enrollment) => enrollment.userId);
   // S4.1: present counts for this batch (only present rows are written — see attendance-tier.ts).
   const present = await prisma.batchAttendance.groupBy({
     by: ['userId'],
     where: { batchId, present: true, userId: { in: userIds } },
     _count: true,
   });
-  const presentMap = new Map<string, number>(present.map((p) => [p.userId, p._count]));
+  const presentMap = new Map<string, number>(present.map((row) => [row.userId, row._count]));
 
   const lastSeen = await prisma.batchAttendance.findMany({
     where: { batchId, userId: { in: userIds }, present: true },
@@ -471,19 +471,19 @@ export async function getBatchStudents(batchId: string, academyId: string) {
     distinct: ['userId'],
     select: { userId: true, date: true },
   });
-  const lastSeenMap = new Map(lastSeen.map((r) => [r.userId, r.date]));
+  const lastSeenMap = new Map(lastSeen.map((row) => [row.userId, row.date]));
 
   const now = new Date();
-  return enrollments.map((e) => {
-    const pct = attendancePct(presentMap.get(e.userId) ?? 0, expectedSessions(e.batch.sessionsPerMonth, e.startedAt, now));
+  return enrollments.map((enrollment) => {
+    const pct = attendancePct(presentMap.get(enrollment.userId) ?? 0, expectedSessions(enrollment.batch.sessionsPerMonth, enrollment.startedAt, now));
     return {
-      id: e.userId,
-      name: e.user.name,
-      phone: e.user.phone,
-      age: e.user.age,
+      id: enrollment.userId,
+      name: enrollment.user.name,
+      phone: enrollment.user.phone,
+      age: enrollment.user.age,
       attendance_pct: pct,
       tier: tierOf(pct),
-      last_seen: lastSeenMap.get(e.userId)?.toISOString().slice(0, 10) ?? null,
+      last_seen: lastSeenMap.get(enrollment.userId)?.toISOString().slice(0, 10) ?? null,
     };
   });
 }
@@ -777,11 +777,11 @@ export async function getEarnings(academyId: string, opts: EarningsOpts = {}) {
     ].filter((c) => c.count > 0),
     by_batch: Object.values(byBatch),
     transactions: transactions.slice(0, 30),
-    payouts: payoutRows.map((p) => ({
-      id: p.id,
-      amount_paise: p.amountPaise,
-      status: p.status,
-      paid_at: p.paidAt?.toISOString(),
+    payouts: payoutRows.map((payout) => ({
+      id: payout.id,
+      amount_paise: payout.amountPaise,
+      status: payout.status,
+      paid_at: payout.paidAt?.toISOString(),
       bank_last4: bankLast4,
       bank_name: academy?.bankHolderName ?? undefined,
     })),

@@ -18,9 +18,9 @@ function discountBpsFor(plan: Plan, batch: BatchDiscount): number {
 }
 
 function addMonths(date: Date, months: number): Date {
-  const d = new Date(date);
-  d.setMonth(d.getMonth() + months);
-  return d;
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + months);
+  return result;
 }
 
 function addDays(date: Date, days: number): Date {
@@ -49,8 +49,8 @@ async function getRazorpay() {
 async function createRazorpayOrder(enrollmentPeriodId: string, amountPaise: number, enrollmentId: string) {
   let razorpayOrderId = `order_enr_${newId().slice(0, 12)}`;
   if (env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET) {
-    const rp = await getRazorpay();
-    const order = await rp.orders.create({
+    const razorpayClient = await getRazorpay();
+    const order = await razorpayClient.orders.create({
       amount: amountPaise,
       currency: 'INR',
       receipt: enrollmentPeriodId,
@@ -552,17 +552,17 @@ export async function getEnrollmentsForBatch(batchId: string, academyId: string)
 
   const enrollments = await repo.findEnrollmentsForBatch(batchId);
   return {
-    items: enrollments.map((e: any) => ({
-      id: e.id,
-      user_id: e.userId,
-      user_name: e.user.name,
-      status: e.status,
-      started_at: e.startedAt.toISOString(),
-      paused_until: e.pausedUntil?.toISOString() ?? null,
-      current_period: e.periods[0] ? {
-        package_type: e.periods[0].packageType,
-        end_date: e.periods[0].endDate.toISOString().split('T')[0],
-        status: e.periods[0].status,
+    items: enrollments.map((enrollment: any) => ({
+      id: enrollment.id,
+      user_id: enrollment.userId,
+      user_name: enrollment.user.name,
+      status: enrollment.status,
+      started_at: enrollment.startedAt.toISOString(),
+      paused_until: enrollment.pausedUntil?.toISOString() ?? null,
+      current_period: enrollment.periods[0] ? {
+        package_type: enrollment.periods[0].packageType,
+        end_date: enrollment.periods[0].endDate.toISOString().split('T')[0],
+        status: enrollment.periods[0].status,
       } : null,
     })),
   };
@@ -571,14 +571,14 @@ export async function getEnrollmentsForBatch(batchId: string, academyId: string)
 export async function getPendingPausesForAcademy(academyId: string) {
   const pauses = await repo.findPendingPausesForAcademy(academyId);
   return {
-    items: pauses.map((p: any) => ({
-      id: p.id,
-      enrollment_id: p.enrollmentId,
-      student_name: p.enrollment.user.name,
-      batch_title: p.enrollment.batch.title,
-      duration: p.duration,
-      reason: p.reason ?? null,
-      requested_at: p.requestedAt.toISOString(),
+    items: pauses.map((pause: any) => ({
+      id: pause.id,
+      enrollment_id: pause.enrollmentId,
+      student_name: pause.enrollment.user.name,
+      batch_title: pause.enrollment.batch.title,
+      duration: pause.duration,
+      reason: pause.reason ?? null,
+      requested_at: pause.requestedAt.toISOString(),
     })),
   };
 }
@@ -586,14 +586,14 @@ export async function getPendingPausesForAcademy(academyId: string) {
 export async function getPendingTransfersForAcademy(academyId: string) {
   const requests = await repo.findPendingTransfersForAcademy(academyId);
   return {
-    items: requests.map((r: any) => ({
-      id: r.id,
-      from_enrollment_id: r.fromEnrollmentId,
-      student_name: r.fromEnrollment.user.name,
-      from_batch: r.fromEnrollment.batch.title,
-      to_batch: r.toBatch.title,
-      reason: r.reason ?? null,
-      requested_at: r.requestedAt.toISOString(),
+    items: requests.map((request: any) => ({
+      id: request.id,
+      from_enrollment_id: request.fromEnrollmentId,
+      student_name: request.fromEnrollment.user.name,
+      from_batch: request.fromEnrollment.batch.title,
+      to_batch: request.toBatch.title,
+      reason: request.reason ?? null,
+      requested_at: request.requestedAt.toISOString(),
     })),
   };
 }

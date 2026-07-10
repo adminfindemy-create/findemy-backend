@@ -4,14 +4,14 @@ import * as repo from './repo.js';
 export async function getCoaches(academyId: string) {
   const coaches = await repo.getCoaches(academyId);
   return {
-    items: coaches.map((c) => ({
-      id: c.id,
-      name: c.name,
-      specialty: c.specialty,
-      bio: c.bio,
-      phone: c.phone,
-      avatar_url: c.avatarUrl ?? null,
-      batch_count: c._count.batches,
+    items: coaches.map((coach) => ({
+      id: coach.id,
+      name: coach.name,
+      specialty: coach.specialty,
+      bio: coach.bio,
+      phone: coach.phone,
+      avatar_url: coach.avatarUrl ?? null,
+      batch_count: coach._count.batches,
     })),
   };
 }
@@ -29,7 +29,7 @@ export async function getCoach(id: string, academyId: string) {
       phone: coach.phone,
       avatar_url: coach.avatarUrl ?? null,
       batch_count: coach.batches.length,
-      batches: coach.batches.map((b) => ({ id: b.id, title: b.title })),
+      batches: coach.batches.map((batch) => ({ id: batch.id, title: batch.title })),
     },
   };
 }

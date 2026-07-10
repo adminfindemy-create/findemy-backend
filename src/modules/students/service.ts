@@ -15,21 +15,23 @@ export async function getStudents(academyId: string, q?: string) {
     },
   });
 
-  const userMap = new Map();
-  for (const e of enrollments) {
-    if (!userMap.has(e.userId)) {
-      userMap.set(e.userId, {
-        id: e.userId,
-        name: e.user.name,
-        phone: e.user.phone,
-        age: e.user.age,
+  // A student can have multiple enrollments (one per batch), so collapse rows into one
+  // entry per student with a list of their batch titles.
+  const studentByUserId = new Map();
+  for (const enrollment of enrollments) {
+    if (!studentByUserId.has(enrollment.userId)) {
+      studentByUserId.set(enrollment.userId, {
+        id: enrollment.userId,
+        name: enrollment.user.name,
+        phone: enrollment.user.phone,
+        age: enrollment.user.age,
         batches: [],
         status: 'active',
       });
     }
-    userMap.get(e.userId).batches.push(e.batch.title);
+    studentByUserId.get(enrollment.userId).batches.push(enrollment.batch.title);
   }
-  return { items: Array.from(userMap.values()), next_cursor: null };
+  return { items: Array.from(studentByUserId.values()), next_cursor: null };
 }
 
 export async function getStudent(userId: string, academyId: string) {
@@ -55,12 +57,12 @@ export async function getStudent(userId: string, academyId: string) {
       name: user.name,
       phone: user.phone,
       age: user.age,
-      batches: enrollments.map((e) => e.batch.title),
+      batches: enrollments.map((enrollment) => enrollment.batch.title),
       status: 'active',
     },
-    attendance_history: attendance.map((a) => ({
-      date: a.date.toISOString().slice(0, 10),
-      present: a.present,
+    attendance_history: attendance.map((record) => ({
+      date: record.date.toISOString().slice(0, 10),
+      present: record.present,
     })),
   };
 }

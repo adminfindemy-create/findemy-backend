@@ -9,10 +9,10 @@ type AttendanceRecord = Awaited<ReturnType<typeof repo.getBatchAttendance>>[numb
 // Kept for the roster serializer + attendance-serializer.test.
 export function serializeAttendance(records: AttendanceRecord[]) {
   return {
-    students: records.map((r) => ({
-      user_id: r.userId,
-      name: r.user.name,
-      present: r.present,
+    students: records.map((record) => ({
+      user_id: record.userId,
+      name: record.user.name,
+      present: record.present,
     })),
   };
 }
@@ -61,15 +61,17 @@ export async function getSessionAttendance(batchId: string, dateStr?: string) {
     repo.getActiveEnrollees(batchId),
     repo.getBatchAttendance(batchId, date),
   ]);
-  const present = new Map(records.filter((r) => r.present).map((r) => [r.userId, r.markedAt]));
-  const roster = enrollees.map((e) => ({
-    user_id: e.userId,
-    name: e.user.name,
-    checked_in: present.has(e.userId),
-    marked_at: present.get(e.userId)?.toISOString(),
+  const presentMarkedAtByUserId = new Map(
+    records.filter((record) => record.present).map((record) => [record.userId, record.markedAt]),
+  );
+  const roster = enrollees.map((enrollee) => ({
+    user_id: enrollee.userId,
+    name: enrollee.user.name,
+    checked_in: presentMarkedAtByUserId.has(enrollee.userId),
+    marked_at: presentMarkedAtByUserId.get(enrollee.userId)?.toISOString(),
   }));
   return {
-    present_count: roster.filter((r) => r.checked_in).length,
+    present_count: roster.filter((rosterEntry) => rosterEntry.checked_in).length,
     total: roster.length,
     roster,
   };

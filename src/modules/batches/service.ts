@@ -11,18 +11,20 @@ export function projectTrialTimes(
   weeks = TRIAL_AVAILABILITY_WEEKS,
 ): Date[] {
   const now = new Date();
-  const out: Date[] = [];
-  for (let d = 0; d < weeks * 7; d++) {
-    const dateStr = istDateKey(new Date(now.getTime() + d * 86400000));
-    const dow = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
-    for (const t of timings) {
-      if (t.dayOfWeek !== dow) continue;
-      const [hh, mm] = t.startTime.split(':').map(Number);
-      const instant = istWallClockToUtc(dateStr, hh, mm);
-      if (instant > now) out.push(instant);
+  const projectedTimes: Date[] = [];
+  // Walk each calendar day in the window and check it against every weekly timing —
+  // simpler and less error-prone than computing "next occurrence of weekday X" directly.
+  for (let dayOffset = 0; dayOffset < weeks * 7; dayOffset++) {
+    const dateStr = istDateKey(new Date(now.getTime() + dayOffset * 86400000));
+    const dayOfWeek = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
+    for (const timing of timings) {
+      if (timing.dayOfWeek !== dayOfWeek) continue;
+      const [hour, minute] = timing.startTime.split(':').map(Number);
+      const instant = istWallClockToUtc(dateStr, hour, minute);
+      if (instant > now) projectedTimes.push(instant);
     }
   }
-  return out.sort((a, b) => a.getTime() - b.getTime());
+  return projectedTimes.sort((timeA, timeB) => timeA.getTime() - timeB.getTime());
 }
 
 // S3.4: the first class occurrence STRICTLY AFTER `after`, from the batch's weekly timings.
@@ -33,18 +35,18 @@ export function nextTimingOccurrenceAfter(
   timings: { dayOfWeek: number; startTime: string }[],
   withinDays = 60,
 ): Date | null {
-  for (let d = 0; d <= withinDays; d++) {
-    const dateStr = istDateKey(new Date(after.getTime() + d * 86400000));
-    const dow = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
-    const todays = timings
-      .filter((t) => t.dayOfWeek === dow)
-      .map((t) => {
-        const [hh, mm] = t.startTime.split(':').map(Number);
-        return istWallClockToUtc(dateStr, hh, mm);
+  for (let dayOffset = 0; dayOffset <= withinDays; dayOffset++) {
+    const dateStr = istDateKey(new Date(after.getTime() + dayOffset * 86400000));
+    const dayOfWeek = new Date(`${dateStr}T00:00:00.000Z`).getUTCDay();
+    const timesOnThisDay = timings
+      .filter((timing) => timing.dayOfWeek === dayOfWeek)
+      .map((timing) => {
+        const [hour, minute] = timing.startTime.split(':').map(Number);
+        return istWallClockToUtc(dateStr, hour, minute);
       })
-      .filter((inst) => inst > after)
-      .sort((a, b) => a.getTime() - b.getTime());
-    if (todays.length) return todays[0];
+      .filter((instant) => instant > after)
+      .sort((timeA, timeB) => timeA.getTime() - timeB.getTime());
+    if (timesOnThisDay.length) return timesOnThisDay[0];
   }
   return null;
 }
@@ -53,14 +55,14 @@ export function nextTimingOccurrenceAfter(
 export async function getTrialAvailability(batchId: string) {
   const batch = await prisma.batch.findUnique({ where: { id: batchId }, include: { timings: true } });
   if (!batch) throw new AppError('NOT_FOUND', 404, 'Batch not found');
-  const avail = await getBatchAvailability(batchId);
-  const times = avail.available > 0 ? projectTrialTimes(batch.timings) : [];
+  const availability = await getBatchAvailability(batchId);
+  const upcomingTimes = availability.available > 0 ? projectTrialTimes(batch.timings) : [];
   return {
-    capacity: avail.capacity,
-    enrolled: avail.enrolled,
-    available: avail.available, // trials do NOT consume this (capacity − enrolled headroom)
-    accepting: avail.accepting,
-    times: times.map((t) => t.toISOString()),
+    capacity: availability.capacity,
+    enrolled: availability.enrolled,
+    available: availability.available, // trials do NOT consume this (capacity − enrolled headroom)
+    accepting: availability.accepting,
+    times: upcomingTimes.map((time) => time.toISOString()),
   };
 }
 
@@ -69,8 +71,8 @@ export async function assertValidTrialTime(batchId: string, trialAtIso: string):
   const batch = await prisma.batch.findUnique({ where: { id: batchId }, include: { timings: true } });
   if (!batch) throw new AppError('NOT_FOUND', 404, 'Batch not found');
   const target = new Date(trialAtIso);
-  const ok = projectTrialTimes(batch.timings).some((t) => t.getTime() === target.getTime());
-  if (!ok) throw new AppError('VALIDATION', 400, 'Selected time is not an available class session');
+  const isValidSession = projectTrialTimes(batch.timings).some((time) => time.getTime() === target.getTime());
+  if (!isValidSession) throw new AppError('VALIDATION', 400, 'Selected time is not an available class session');
   return target;
 }
 

@@ -12,23 +12,23 @@ async function getRazorpay() {
 
 type PaymentTable = 'payment' | 'workshopPayment' | 'eventPayment' | 'enrollmentPayment';
 
-async function reconcileTable(table: PaymentTable, rp: any) {
+async function reconcileTable(table: PaymentTable, razorpayClient: any) {
   let updated = 0;
 
-  const stale = await (prisma as any)[table].findMany({
+  const stalePayments = await (prisma as any)[table].findMany({
     where: { refundStatus: 'requested' },
     select: { id: true, razorpayRefundId: true, razorpayPaymentId: true },
   });
 
-  for (const rec of stale) {
-    if (!rec.razorpayRefundId || !rec.razorpayPaymentId) continue;
+  for (const payment of stalePayments) {
+    if (!payment.razorpayRefundId || !payment.razorpayPaymentId) continue;
     try {
-      const refund = await rp.payments.fetchRefund(rec.razorpayPaymentId, rec.razorpayRefundId);
+      const refund = await razorpayClient.payments.fetchRefund(payment.razorpayPaymentId, payment.razorpayRefundId);
       if (refund.status === 'processed') {
-        await (prisma as any)[table].update({ where: { id: rec.id }, data: { refundStatus: 'processed', refundedAt: new Date() } });
+        await (prisma as any)[table].update({ where: { id: payment.id }, data: { refundStatus: 'processed', refundedAt: new Date() } });
         updated++;
       } else if (refund.status === 'failed') {
-        await (prisma as any)[table].update({ where: { id: rec.id }, data: { refundStatus: 'failed' } });
+        await (prisma as any)[table].update({ where: { id: payment.id }, data: { refundStatus: 'failed' } });
         updated++;
       }
     } catch { /* skip; will retry next run */ }
@@ -38,13 +38,13 @@ async function reconcileTable(table: PaymentTable, rp: any) {
 }
 
 export async function reconcileStaleRefunds() {
-  const rp = await getRazorpay();
-  if (!rp) return { updated: 0, skipped: 'no_razorpay_config' };
+  const razorpayClient = await getRazorpay();
+  if (!razorpayClient) return { updated: 0, skipped: 'no_razorpay_config' };
 
   const tables: PaymentTable[] = ['payment', 'workshopPayment', 'eventPayment', 'enrollmentPayment'];
   let total = 0;
   for (const table of tables) {
-    total += await reconcileTable(table, rp);
+    total += await reconcileTable(table, razorpayClient);
   }
   return { updated: total };
 }
