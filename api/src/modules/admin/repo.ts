@@ -1,5 +1,6 @@
 import type { AcademyStatus, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { signKycEntity } from '../../lib/kyc-files.js';
 
 // ---------- Admin allowlist ----------
 
@@ -82,8 +83,8 @@ const ACADEMY_LIST_SELECT = {
 
 // The entity-KYC queue: one row per payee, with the branches it backs. A brand-new branch
 // reusing an existing entity never appears here — that is the whole point of the split.
-export function listFinancialEntities(bankKycStatus?: 'unverified' | 'verified' | 'failed') {
-  return prisma.financialEntity.findMany({
+export async function listFinancialEntities(bankKycStatus?: 'unverified' | 'verified' | 'failed') {
+  const entities = await prisma.financialEntity.findMany({
     where: bankKycStatus ? { bankKycStatus } : undefined,
     include: {
       group: { select: { id: true, name: true } },
@@ -92,20 +93,29 @@ export function listFinancialEntities(bankKycStatus?: 'unverified' | 'verified' 
     },
     orderBy: { createdAt: 'desc' },
   });
+  return Promise.all(entities.map(signKycEntity));
 }
 
-export function listAcademies(status?: AcademyStatus) {
-  return prisma.academy.findMany({
+// KYC document keys in the academy rows below are swapped for short-lived presigned URLs.
+type AcademyListRow = Prisma.AcademyGetPayload<{ select: typeof ACADEMY_LIST_SELECT }>;
+async function signAcademy(a: AcademyListRow): Promise<AcademyListRow> {
+  return a.financialEntity ? { ...a, financialEntity: await signKycEntity(a.financialEntity) } : a;
+}
+
+export async function listAcademies(status?: AcademyStatus) {
+  const rows = await prisma.academy.findMany({
     where: status ? { status } : undefined,
     select: ACADEMY_LIST_SELECT,
     orderBy: { createdAt: 'desc' },
   });
+  return Promise.all(rows.map(signAcademy));
 }
 
-export function getAcademy(id: string) {
-  return prisma.academy.findUnique({ where: { id }, select: ACADEMY_LIST_SELECT });
+export async function getAcademy(id: string) {
+  const row = await prisma.academy.findUnique({ where: { id }, select: ACADEMY_LIST_SELECT });
+  return row ? signAcademy(row) : null;
 }
 
-export function updateAcademy(id: string, data: Prisma.AcademyUpdateInput) {
-  return prisma.academy.update({ where: { id }, data, select: ACADEMY_LIST_SELECT });
+export async function updateAcademy(id: string, data: Prisma.AcademyUpdateInput) {
+  return signAcademy(await prisma.academy.update({ where: { id }, data, select: ACADEMY_LIST_SELECT }));
 }

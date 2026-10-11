@@ -5,6 +5,7 @@ import { attendancePct, tierOf } from '../../lib/attendance-tier.js';
 import { statsForBatches } from '../attendance/stats.js';
 import * as coachRepo from '../coaches/repo.js';
 import * as repo from './repo.js';
+import { signKycEntity } from '../../lib/kyc-files.js';
 import type { BatchScope } from '../../lib/scope.js';
 import { learnerIdFromStudentRef, studentCard } from '../../lib/learner-access.js';
 
@@ -723,7 +724,7 @@ export function touchesBrandSettings(data: {
 export async function getAcademy(academyId: string) {
   const academy = await repo.getAcademyById(academyId);
   if (!academy) throw new AppError('NOT_FOUND', 404, 'Academy not found');
-  const entity = academy.financialEntity;
+  const entity = academy.financialEntity ? await signKycEntity(academy.financialEntity) : null;
   return {
     academy: {
       id: academy.id,
@@ -1031,7 +1032,7 @@ function shapeEntity(e: {
 
 export async function getFinancialEntities(groupId: string) {
   const entities = await repo.listFinancialEntities(groupId);
-  return { items: entities.map(shapeEntity) };
+  return { items: await Promise.all(entities.map(async (e) => shapeEntity(await signKycEntity(e)))) };
 }
 
 export async function updateFinancialEntity(
@@ -1081,7 +1082,7 @@ export async function updateFinancialEntity(
     prismaData,
     data.gst_registrations?.map((g) => ({ gstNumber: g.gst_number, state: g.state })),
   );
-  return { financial_entity: updated ? shapeEntity(updated) : null };
+  return { financial_entity: updated ? shapeEntity(await signKycEntity(updated)) : null };
 }
 
 /**

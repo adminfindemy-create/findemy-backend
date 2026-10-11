@@ -8,6 +8,7 @@ import { getAuditLog } from './audit.js';
 import { getMyTeachingProfile, updateMyTeachingProfile } from './teaching-profile.js';
 import { getMyAccount, updateMyAccount } from './my-account.js';
 import { AppError } from '../../lib/app-error.js';
+import { kycKeyPrefix, isKycKeyOwnedBy } from '../../lib/kyc-files.js';
 import { batchScope, isAssignedScope } from '../../lib/scope.js';
 import { writeStaffAudit } from '../../lib/audit-actor.js';
 
@@ -149,10 +150,10 @@ const FinancialEntitySchema = z.object({
   bank_ifsc: z.string().optional(),
   bank_holder_name: z.string().optional(),
   pan_number: z.string().max(20).optional(),
-  pan_image_url: z.string().url().optional(),
+  pan_image_url: z.string().min(1).optional(),
   aadhaar_last4: z.string().regex(/^\d{4}$/, 'Enter the last 4 digits').optional().or(z.literal('')),
-  aadhaar_image_url: z.string().url().optional(),
-  business_doc_urls: z.array(z.string().url()).optional(),
+  aadhaar_image_url: z.string().min(1).optional(),
+  business_doc_urls: z.array(z.string().min(1)).optional(),
   // One entity can hold a Delhi AND a Haryana GSTIN — hence a list, not a column.
   gst_registrations: z
     .array(z.object({ gst_number: z.string().min(1).max(20), state: z.string().max(60).optional() }))
@@ -334,6 +335,10 @@ export const studioRoutes: FastifyPluginAsync = async (app) => {
   app.put('/studio/financial-entities/:id', { preHandler: app.requireAuth('academy', 'finance.kyc') }, async (req) => {
     const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
     const body = FinancialEntitySchema.parse(req.body);
+    const keys = [body.pan_image_url, body.aadhaar_image_url, ...(body.business_doc_urls ?? [])];
+    if (keys.some((k) => k !== undefined && !isKycKeyOwnedBy(k, req.user.group_id!))) {
+      throw new AppError('VALIDATION', 400, 'Invalid KYC document reference — upload the file again');
+    }
     return service.updateFinancialEntity(req.user.group_id!, id, body);
   });
 
@@ -393,15 +398,21 @@ export const studioRoutes: FastifyPluginAsync = async (app) => {
     return storeMedia({ keyPrefix: `programs/${req.user.group_id!}`, buffer, mimeType: data.mimetype, baseUrl });
   });
 
-  // #3: KYC document upload (PAN/Aadhaar/GST/business). Returns { url } to store on the academy.
+  // #3: KYC document upload (PAN/Aadhaar/GST/business). Stored in the PRIVATE bucket; returns
+  // { url } — an opaque storage key to save on the financial entity. Reads come back as
+  // short-lived presigned URLs, never a public link.
   app.post('/studio/kyc/upload', { preHandler: app.requireAuth('academy', 'finance.kyc') }, async (req) => {
     const data = await req.file();
     if (!data) throw new Error('No file uploaded');
     const buffer = await data.toBuffer();
-    const { storeMedia } = await import('../../lib/media-storage.js');
-    const baseUrl = `${req.protocol}://${req.headers.host}`;
+    const { storePrivateFile } = await import('../../lib/media-storage.js');
     // Keyed by the BRAND: KYC documents belong to a financial entity, never to a location.
-    return storeMedia({ keyPrefix: `kyc/${req.user.group_id!}`, buffer, mimeType: data.mimetype, baseUrl });
+    const { storageKey } = await storePrivateFile({
+      keyPrefix: kycKeyPrefix(req.user.group_id!),
+      buffer,
+      mimeType: data.mimetype,
+    });
+    return { url: storageKey };
   });
 
   // --- Programs ---

@@ -1,31 +1,17 @@
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { env } from '../../lib/env.js';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { s3Client, publicBucket, publicUrlFor } from '../../lib/s3.js';
 import { AppError } from '../../lib/app-error.js';
 import { newId } from '../../lib/id.js';
 import { prisma } from '../../lib/prisma.js';
-
-function getS3Client() {
-  if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_BUCKET) {
-    return null;
-  }
-  return new S3Client({
-    region: 'auto',
-    endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: {
-      accessKeyId: env.R2_ACCESS_KEY_ID,
-      secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-    },
-  });
-}
 
 export async function uploadAcademyImage(
   academyId: string,
   fileBuffer: Buffer,
   mimeType: string,
 ): Promise<string> {
-  const s3 = getS3Client();
+  const s3 = s3Client();
   if (!s3) {
-    throw new AppError('CONFIG', 400, 'Media upload is not configured. Set R2 credentials in environment variables.');
+    throw new AppError('CONFIG', 400, 'Media upload is not configured. Set S3_BUCKET in environment variables.');
   }
 
   // S1.1: academy media gallery accepts photos AND videos (≤10 total).
@@ -46,14 +32,14 @@ export async function uploadAcademyImage(
 
   await s3.send(
     new PutObjectCommand({
-      Bucket: env.R2_BUCKET!,
+      Bucket: publicBucket(),
       Key: key,
       Body: fileBuffer,
       ContentType: mimeType,
     }),
   );
 
-  return `https://${env.R2_BUCKET}.${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${key}`;
+  return publicUrlFor(key);
 }
 
 export async function addAcademyImage(academyId: string, imageUrl: string) {

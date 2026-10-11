@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { readLocalMedia } from '../../lib/media-storage.js';
 
 // Serves locally-stored media (dev fallback when cloud storage isn't configured). Public — media
-// must be viewable without auth. In production with R2/GCS, media URLs point at the bucket instead.
+// must be viewable without auth. In production with S3, media URLs point at the bucket instead.
 export const mediaRoutes: FastifyPluginAsync = async (app) => {
   app.get('/uploads/*', async (req, reply) => {
     const rel = (req.params as Record<string, string>)['*'] ?? '';

@@ -1,11 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
-import { env } from './env.js';
+import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { s3Client, publicBucket, privateBucket, publicUrlFor } from './s3.js';
 import { AppError } from './app-error.js';
 import { newId } from './id.js';
 
-// Photo/video media storage. Uses Cloudflare R2 (or, later, GCS) when configured; otherwise
+// Photo/video media storage. Uses AWS S3 when configured; otherwise
 // falls back to local disk served by GET /uploads/* — so media works in dev without cloud creds.
 //
 // TWO storage worlds live here, deliberately kept apart:
@@ -54,15 +54,6 @@ export const UPLOAD_DIR = path.resolve('uploads');
 // and refuses to traverse out, so private objects are structurally unreachable from it.
 export const PRIVATE_DIR = path.resolve('private-uploads');
 
-function r2Client() {
-  if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_BUCKET) return null;
-  return new S3Client({
-    region: 'auto',
-    endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: { accessKeyId: env.R2_ACCESS_KEY_ID, secretAccessKey: env.R2_SECRET_ACCESS_KEY },
-  });
-}
-
 // Store an uploaded file and return its public URL + media type. `baseUrl` (e.g.
 // "http://localhost:8080") is used to build the URL for the local-disk fallback.
 export async function storeMedia(args: {
@@ -78,10 +69,10 @@ export async function storeMedia(args: {
   const type: MediaType = args.mimeType.startsWith('video/') ? 'video' : 'photo';
   const key = `${args.keyPrefix}/${newId()}.${ext}`;
 
-  const s3 = r2Client();
+  const s3 = s3Client();
   if (s3) {
-    await s3.send(new PutObjectCommand({ Bucket: env.R2_BUCKET!, Key: key, Body: args.buffer, ContentType: args.mimeType }));
-    return { url: `https://${env.R2_BUCKET}.${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${key}`, type };
+    await s3.send(new PutObjectCommand({ Bucket: publicBucket(), Key: key, Body: args.buffer, ContentType: args.mimeType }));
+    return { url: publicUrlFor(key), type };
   }
 
   // Local-disk fallback.
@@ -101,7 +92,7 @@ function mb(bytes: number): string {
 
 /**
  * Store a private (never publicly served) object and return its storage key. Same key shape on
- * R2 and local disk, so one read path serves both. Rejects unsupported types and oversize files
+ * S3 and local disk, so one read path serves both. Rejects unsupported types and oversize files
  * with a message that NAMES the real limit — a silent 413 is how teachers abandon a feature.
  */
 export async function storePrivateFile(args: {
@@ -124,10 +115,10 @@ export async function storePrivateFile(args: {
   }
 
   const storageKey = `${args.keyPrefix}/${newId()}.${ext}`;
-  const s3 = r2Client();
+  const s3 = s3Client();
   if (s3) {
     await s3.send(
-      new PutObjectCommand({ Bucket: env.R2_BUCKET!, Key: storageKey, Body: args.buffer, ContentType: args.mimeType }),
+      new PutObjectCommand({ Bucket: privateBucket(), Key: storageKey, Body: args.buffer, ContentType: args.mimeType }),
     );
     return { storageKey, sizeBytes: args.buffer.byteLength };
   }
@@ -156,10 +147,10 @@ export async function readPrivateFile(
   const ext = path.extname(storageKey).slice(1).toLowerCase();
   const contentType = CONTENT_TYPE_BY_EXT[ext] ?? 'application/octet-stream';
 
-  const s3 = r2Client();
+  const s3 = s3Client();
   if (s3) {
     try {
-      const res = await s3.send(new GetObjectCommand({ Bucket: env.R2_BUCKET!, Key: storageKey }));
+      const res = await s3.send(new GetObjectCommand({ Bucket: privateBucket(), Key: storageKey }));
       if (!res.Body) return null;
       const bytes = await res.Body.transformToByteArray();
       return { buffer: Buffer.from(bytes), contentType };
@@ -179,9 +170,9 @@ export async function readPrivateFile(
 
 /** Best-effort delete of a private object. A missing object is not an error. */
 export async function deletePrivateFile(storageKey: string): Promise<void> {
-  const s3 = r2Client();
+  const s3 = s3Client();
   if (s3) {
-    await s3.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET!, Key: storageKey })).catch(() => {});
+    await s3.send(new DeleteObjectCommand({ Bucket: privateBucket(), Key: storageKey })).catch(() => {});
     return;
   }
   const full = privatePathFor(storageKey);
