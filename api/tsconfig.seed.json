@@ -1,0 +1,18 @@
+// Typechecks the prisma/ scripts, which the main tsconfig deliberately excludes
+// (`rootDir: ./src`, so including them would change the build output layout).
+// Not part of `pnpm build`; run via `pnpm typecheck:seed`.
+{
+  "extends": "@findemy/config/tsconfig.base.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["prisma/**/*.ts", "src/lib/permissions.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    // PRE-EXISTING ROT, excluded so this config passes out of the box: seed-online-test.ts was
+    // never updated for the multi-branch refactor and still writes `Coach.academyId`,
+    // `Program.academyId` and `Batch.level`, none of which exist any more. It is unreferenced
+    // by any script or doc and would fail at runtime as well as at compile time. Delete it or
+    // fix it — do not just keep excluding it.
+    "prisma/seed-online-test.ts"
+  ]
+}

@@ -1,0 +1,1756 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Identity ----------
+
+model User {
+  id            String     @id @default(cuid())
+  phone         String?    @unique
+  email         String?    @unique
+  emailVerified Boolean    @default(false)
+  appleSub      String?    @unique
+  googleSub     String?    @unique
+  name          String?
+  age           Int?
+  location      String?
+  lat           Float?
+  lng           Float?
+  interests     Category[]
+  // Specific art forms within `interests` ("guitar", "kathak"). Keys from ART_FORMS in
+  // @findemy/types; plain text so the catalogue can change without a migration.
+  artForms      String[]   @default([])
+  avatarInitial String     @db.VarChar(2)
+  // UNUSED since per-class codes (lib/attendance-code.ts). Still written at sign-up because the
+  // column is NOT NULL; drop it with Learner.attendanceOtp in one migration.
+  attendanceOtp String     @db.VarChar(4)
+  createdAt     DateTime   @default(now())
+  lastActiveAt  DateTime   @default(now())
+
+  // The account holder's own learner profile. Every user has exactly one; it is what a request
+  // falls back to when no learner is named, so self-booking keeps working unchanged.
+  selfLearnerId String?        @unique
+  selfLearner   Learner?       @relation("SelfLearner", fields: [selfLearnerId], references: [id])
+  guardianships Guardianship[]
+
+  referralPoints        Int                    @default(0)
+  bookings              Booking[]
+  trials                Trial[]
+  reviews               Review[]
+  enrollments           Enrollment[]
+  attendances           BatchAttendance[]
+  savedAcademies        SavedAcademy[]
+  workshopRegistrations WorkshopRegistration[]
+  eventRegistrations    EventRegistration[]
+  supportConversations  SupportConversation[]
+  referralsSent         Referral[]             @relation("ReferralsSent")
+  referralsReceived     Referral[]             @relation("ReferralsReceived")
+
+  @@index([lat, lng])
+  @@map("users")
+}
+
+// ---------- Family accounts ----------
+//
+// `User` is the account: login, payments, push, referrals. `Learner` is whoever attends: a parent
+// can have several, each with their own enrollments, trials, attendance code and history. Every
+// user also has a self learner (User.selfLearnerId), so adults booking for themselves need no
+// special case.
+
+model Learner {
+  id             String         @id @default(cuid())
+  name           String
+  dob            DateTime?      @db.Date
+  gender         LearnerGender?
+  avatarInitial  String         @db.VarChar(2)
+  // UNUSED since per-class codes (lib/attendance-code.ts derives a code per class and per trial).
+  // Kept only so the column can be dropped together with User.attendanceOtp in one migration.
+  attendanceOtp  String         @db.VarChar(4)
+  status         LearnerStatus  @default(active)
+  // Guardian consent to process a minor's data (DPDP). Null on self learners.
+  consentAt      DateTime?
+  consentVersion String?
+  createdAt      DateTime       @default(now())
+
+  selfOf       User?             @relation("SelfLearner")
+  guardians    Guardianship[]
+  enrollments  Enrollment[]
+  trials       Trial[]
+  bookings     Booking[]
+  attendances  BatchAttendance[]
+  eventEntries EventAttendee[]
+
+  @@map("learners")
+}
+
+enum LearnerGender {
+  male
+  female
+  other
+}
+
+enum LearnerStatus {
+  active
+  archived
+}
+
+// Which accounts may act for which learners. `self` is the account holder's own learner; `owner`
+// is a parent who added a child. A second guardian later is just another row.
+model Guardianship {
+  userId    String
+  user      User         @relation(fields: [userId], references: [id])
+  learnerId String
+  learner   Learner      @relation(fields: [learnerId], references: [id])
+  role      GuardianRole @default(owner)
+  createdAt DateTime     @default(now())
+
+  @@id([userId, learnerId])
+  @@index([learnerId])
+  @@map("guardianships")
+}
+
+enum GuardianRole {
+  self
+  owner
+}
+
+// The OWNER login. Deliberately NOT unique on `groupId`: several owner logins per brand are
+// allowed, and leaving the column non-unique means the auth table is not migrated twice.
+// Non-owner logins are NOT rows here — a manager or teacher is a `StaffAccount`, which is a
+// parallel academy-side identity carrying roles, permissions and branch scope.
+// See ai-usage/final-app/plan/academy-staff-roles.md §2.
+model AcademyAccount {
+  id               String        @id @default(cuid())
+  phone            String?       @unique
+  email            String?       @unique
+  emailVerified    Boolean       @default(false)
+  appleSub         String?       @unique
+  googleSub        String?       @unique
+  ownerName        String?
+  groupId          String?
+  group            AcademyGroup? @relation(fields: [groupId], references: [id])
+  // Which branch this login lands on when the client sends no `X-Branch-Id`.
+  defaultAcademyId String?
+  defaultAcademy   Academy?      @relation("AccountDefaultBranch", fields: [defaultAcademyId], references: [id])
+  createdAt        DateTime      @default(now())
+
+  @@index([groupId])
+  @@map("academy_accounts")
+}
+
+enum Category {
+  music
+  dance
+  arts
+  yoga
+}
+
+// Academy's offered delivery modes (set at onboarding). Distinct from a batch's
+// delivery Mode — `home_visit` is offered-only and is not a batch mode.
+enum OfferedMode {
+  in_studio
+  online
+  home_visit
+}
+
+// ---------- Catalog ----------
+
+// The BRAND. One row per academy business; its physical locations are `Academy` rows (branches).
+// Owns everything a brand authors once — marketing identity, programs, coaches — so an owner with
+// five branches does not re-author "Guitar Lessons" five times.
+// See ai-usage/final-app/plan/academy-multi-branch.md.
+model AcademyGroup {
+  id           String     @id @default(cuid())
+  name         String
+  bio          String?
+  tagline      String?
+  specialities String[]   @default([])
+  category     Category
+  categories   Category[] @default([])
+  createdAt    DateTime   @default(now())
+
+  branches          Academy[]
+  accounts          AcademyAccount[]
+  programs          Program[]
+  coaches           Coach[]
+  financialEntities FinancialEntity[]
+  staffAccounts     StaffAccount[]
+  staffRoles        StaffRole[]
+  settings          AcademyGroupSettings?
+
+  @@map("academy_groups")
+}
+
+// The PAYEE. Split off `Academy` so several branches of one legal/financial setup share one
+// KYC record, one bank account, one Razorpay fund account and ONE payout per period. The
+// owner's choice is "same financial setup or a separate one?" — NOT "own GSTIN?": one business
+// across two states holds two GSTINs under one entity (see `GSTRegistration`).
+model FinancialEntity {
+  id                String        @id @default(cuid())
+  groupId           String
+  group             AcademyGroup  @relation(fields: [groupId], references: [id])
+  // Human label so an owner can tell two entities apart ("Findemy Retail Pvt Ltd").
+  label             String?
+  // KYC verification docs — uploaded in Studio group settings, reviewed in the Ops Console.
+  // Aadhaar is stored as last-4 + image only (PII minimisation).
+  panNumber         String?
+  panImageUrl       String?
+  aadhaarLast4      String?       @db.VarChar(4)
+  aadhaarImageUrl   String?
+  businessDocUrls   String[]      @default([])
+  bankAccountId     String?
+  bankAccountNumber String?
+  bankIfsc          String?
+  bankHolderName    String?
+  rzpContactId      String?
+  rzpFundAccountId  String?
+  bankKycStatus     BankKycStatus @default(unverified)
+  // S7: rolling reserve rate withheld from captured revenue (bps; 1000 = 10%).
+  reserveRateBps    Int           @default(1000)
+  createdAt         DateTime      @default(now())
+
+  branches         Academy[]
+  gstRegistrations GSTRegistration[]
+  payouts          Payout[]
+  reserveHolds     ReserveHold[]
+  recoveries       AcademyRecovery[]
+  commissionLedger CommissionLedger[]
+
+  @@index([groupId])
+  @@index([bankKycStatus])
+  @@map("financial_entities")
+}
+
+// Replaces the single `Academy.gstNumber` column: one entity operating in several states holds
+// one GSTIN per state. Number only — the certificate PHOTO was deliberately dropped: PAN +
+// Aadhaar images already establish identity and a GSTIN is verifiable against the registry.
+model GSTRegistration {
+  id                String          @id @default(cuid())
+  financialEntityId String
+  financialEntity   FinancialEntity @relation(fields: [financialEntityId], references: [id], onDelete: Cascade)
+  gstNumber         String
+  state             String?
+  createdAt         DateTime        @default(now())
+
+  @@unique([financialEntityId, gstNumber])
+  @@index([financialEntityId])
+  @@map("gst_registrations")
+}
+
+// A BRANCH — one physical location of an `AcademyGroup`. Deliberately still called `Academy`:
+// it stays the grain that `Batch`, `Trial`, `Review`, `SavedAcademy`, `Workshop` and discovery
+// already use, so `Batch.academyId` never changes meaning and ~30 studio routes keep working.
+model Academy {
+  id                       String              @id @default(cuid())
+  groupId                  String
+  group                    AcademyGroup        @relation(fields: [groupId], references: [id])
+  // The location label ("Andheri West"). `name` stays the full composed display name
+  // ("XYZ Academy — Andheri West"), auto-composed on create and editable, because text
+  // search and every display path already read `name`.
+  branchLabel              String?
+  name                     String
+  financialEntityId        String
+  financialEntity          FinancialEntity     @relation(fields: [financialEntityId], references: [id])
+  // `category` stays the PRIMARY art form: it drives the cover art, the badge on discovery
+  // cards and ordering. `categories` is everything this branch actually teaches, so a studio
+  // running music and dance is findable under both. Always contains `category`.
+  category                 Category
+  categories               Category[]          @default([])
+  address                  String
+  lat                      Float?
+  lng                      Float?
+  // `verified` is kept for back-compat (discovery reads it) but is DERIVED from `status`:
+  // verified == (status == approved). Every write to `status` must sync `verified`.
+  verified                 Boolean             @default(false)
+  status                   AcademyStatus       @default(pending_review)
+  reviewReason             String?
+  suspendedReason          String?
+  onlineAvailable          Boolean             @default(false)
+  rating                   Float               @default(0)
+  ratingCount              Int                 @default(0)
+  bio                      String?
+  tagline                  String?
+  specialities             String[]            @default([])
+  // What this LOCATION physically offers (parking, lift, washroom…). Keys from the fixed
+  // `AMENITIES` catalogue in @findemy/types, stored as plain strings so retiring a key never
+  // needs a schema migration. Branch-level on purpose: a building has the parking, not a brand.
+  amenities                String[]            @default([])
+  modesOffered             OfferedMode[]       @default([])
+  images                   String[]            @default([])
+  pauseRequiresApproval    Boolean             @default(true)
+  transferRequiresApproval Boolean             @default(true)
+  monthlyRefundPolicy      MonthlyRefundPolicy @default(no_refund)
+  createdAt                DateTime            @default(now())
+
+  batches              Batch[]
+  trials               Trial[]
+  reviews              Review[]
+  workshops            Workshop[]
+  savedBy              SavedAcademy[]
+  commissionLedger     CommissionLedger[]
+  supportConversations SupportConversation[]
+  homeCoaches          Coach[]               @relation("CoachHomeBranch")
+  defaultForAccounts   AcademyAccount[]      @relation("AccountDefaultBranch")
+  staffBranchScopes    StaffBranchScope[]
+
+  @@index([groupId])
+  @@index([financialEntityId])
+  @@index([category, rating])
+  @@index([lat, lng])
+  @@map("academies")
+}
+
+// Verification lifecycle owned by the Ops Console. `verified` (above) mirrors `status==approved`.
+enum AcademyStatus {
+  pending_review
+  approved
+  rejected
+  suspended
+}
+
+// RazorpayX bank-KYC state, established during verification (Contact + FundAccount created).
+enum BankKycStatus {
+  unverified
+  verified
+  failed
+}
+
+// S2.4: one row per captured trial/enrolment recording Findemy's commission (taken from the
+// academy payout, never added to the learner price). Idempotent via @@unique([itemType,itemId]).
+enum CommissionItemType {
+  trial
+  enrollment
+  workshop
+  event
+}
+
+enum CommissionStatus {
+  accrued
+  reversed
+}
+
+model CommissionLedger {
+  id                String             @id @default(cuid())
+  // Branch grain — the academy earnings screen reports per branch off this column.
+  academyId         String
+  academy           Academy            @relation(fields: [academyId], references: [id])
+  // Payee grain — settlement sums commission by entity, so two branches sharing one entity
+  // produce one payout row per period. Both columns are always populated together.
+  financialEntityId String
+  financialEntity   FinancialEntity    @relation(fields: [financialEntityId], references: [id])
+  itemType          CommissionItemType
+  itemId            String // bookingId (trial) | enrollmentPeriodId | workshopPaymentId | eventPaymentId
+  grossPaise        Int
+  commissionBps     Int // rate snapshot at capture time
+  commissionPaise   Int
+  reversedPaise     Int                @default(0) // proportional reversal on refund
+  status            CommissionStatus   @default(accrued)
+  createdAt         DateTime           @default(now())
+
+  @@unique([itemType, itemId])
+  @@index([academyId, status])
+  @@index([financialEntityId, status])
+  @@map("commission_ledger")
+}
+
+// S7 settlement: a rolling reserve tranche withheld from captured revenue (default 10%). Held for
+// 60 days, then released back to the academy — unless drawn first to cover a discontinuation refund.
+enum ReserveStatus {
+  held
+  released
+  consumed
+}
+
+model ReserveHold {
+  id                String          @id @default(cuid())
+  financialEntityId String
+  financialEntity   FinancialEntity @relation(fields: [financialEntityId], references: [id])
+  amountPaise       Int
+  consumedPaise     Int             @default(0) // drawn by refund recoveries
+  sourceType        String // 'enrollment' | 'workshop' | 'trial'
+  sourceId          String
+  heldAt            DateTime        @default(now())
+  releaseAt         DateTime
+  status            ReserveStatus   @default(held)
+
+  @@index([financialEntityId, status])
+  @@map("reserve_holds")
+}
+
+// S7 settlement: what Findemy recovers from an academy when it fronts a discontinuation refund.
+// Academy bears the full gross R (incl. Findemy's margin). Reserve is drawn first; the remainder
+// (negativePaise) becomes a negative balance netted from future payouts.
+model AcademyRecovery {
+  id                  String          @id @default(cuid())
+  financialEntityId   String
+  financialEntity     FinancialEntity @relation(fields: [financialEntityId], references: [id])
+  grossPaise          Int
+  reserveAppliedPaise Int             @default(0)
+  negativePaise       Int             @default(0)
+  // How much of negativePaise has been netted against payouts. Outstanding = negativePaise − appliedPaise.
+  appliedPaise        Int             @default(0)
+  sourceType          String // 'enrollment_refund'
+  sourceId            String
+  createdAt           DateTime        @default(now())
+
+  @@index([financialEntityId])
+  @@map("academy_recoveries")
+}
+
+// A person's PUBLIC TEACHING IDENTITY — the row students see on the academy page. Brand-level:
+// coaches float between branches, and `Batch.coachId` pins them per batch.
+//
+// This and `StaffAccount` are two facts about ONE human: who they are to students, and what they
+// can open in the app. They stay separate tables because a Manager has a login and no teaching
+// profile, and because `Batch.coachId` points here — a batch is taught by a person, not by a
+// login. The 1:1 is enforced by `StaffRoleAssignment.coachId @unique` plus the invite flow, which
+// creates both rows together so a second Coach for the same person is unreachable.
+model Coach {
+  id           String       @id @default(cuid())
+  groupId      String
+  group        AcademyGroup @relation(fields: [groupId], references: [id])
+  // A LABEL ("usually teaches at Andheri"), NOT access control — a coach can be on any
+  // batch in the group. Access for a teacher LOGIN comes from `StaffRoleAssignment.coachId`
+  // (which batches they may see) and `StaffBranchScope` (which branches), never from here.
+  homeBranchId String?
+  homeBranch   Academy?     @relation("CoachHomeBranch", fields: [homeBranchId], references: [id])
+  name         String
+  specialty    String
+  bio          String?
+  // Experience AND qualifications in ONE free-text field, because that is how a teacher writes
+  // it: "10 years teaching · Trinity College London Grade 8". Two columns would invite two
+  // half-filled boxes.
+  credentials  String?
+  avatarUrl    String?
+  createdAt    DateTime     @default(now())
+
+  batches          Batch[]
+  workshops        WorkshopCoach[]
+  // Set when a teacher LOGIN is linked to this coaching profile. A Coach still has no login
+  // of its own; the login is the StaffAccount.
+  staffAssignments StaffRoleAssignment[]
+
+  @@index([groupId])
+  @@map("coaches")
+}
+
+// A named offering an academy authors ("Guitar Lessons"). Owns the identity/marketing copy
+// shown to learners; a Program owns many Batches (concrete schedule instances that can each be
+// a different level/coach/timing). See ai-usage/final-app/plan/programs-and-batch-discontinuation.md.
+model Program {
+  id           String       @id @default(cuid())
+  // Brand-level: authored once, offered at whichever branches run a batch of it. Availability
+  // at a branch is DERIVED ("has an active batch there"), never stored — see plan §1.1.
+  groupId      String
+  group        AcademyGroup @relation(fields: [groupId], references: [id])
+  title        String
+  category     Category
+  // Difficulty of the offering itself ("Beginner"/"Intermediate"/"Advanced"). Free String —
+  // the academy form offers chips but does not constrain it. Moved up from Batch: a program
+  // is one offering at one level, and its batches differ by schedule/audience, not level.
+  // See ai-usage/final-app/plan/batch-attributes-and-level-move.md.
+  level        String
+  // Academy-authored program copy. (Nullable column; the create-program form enforces required.)
+  description  String?
+  thingsToKnow String[]     @default([])
+  createdAt    DateTime     @default(now())
+
+  batches Batch[]
+  media   ProgramMedia[]
+
+  @@index([groupId])
+  @@map("programs")
+}
+
+// Academy-uploaded photos/videos for a program (max 10 combined). Shown at the top of the
+// program screen in both apps. type = 'photo' | 'video'.
+model ProgramMedia {
+  id        String   @id @default(cuid())
+  programId String
+  program   Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  url       String
+  type      String
+  order     Int      @default(0)
+  // Ops Console moderation: hidden media is excluded from public program/academy reads.
+  hidden    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([programId])
+  @@map("program_media")
+}
+
+model Batch {
+  id                     String        @id @default(cuid())
+  academyId              String
+  academy                Academy       @relation(fields: [academyId], references: [id])
+  programId              String
+  program                Program       @relation(fields: [programId], references: [id])
+  coachId                String
+  coach                  Coach         @relation(fields: [coachId], references: [id])
+  // NOTE (expand→migrate→contract): title/category/description/thingsToKnow now live on Program.
+  // They are kept here (denormalized from the parent program) until every consumer reads from
+  // Program; a later cleanup slice drops them. Seed keeps them in sync with the program.
+  title                  String
+  category               Category
+  // Academy-authored label distinguishing this batch from its siblings ("Weekday Evening").
+  // Replaces `level`, which now lives on Program.
+  name                   String
+  // Target age range. Both null = all ages; maxAge null = open-ended ("6+ yrs"). Ints rather
+  // than enum buckets so discovery can answer "what fits a 9-year-old" (minAge <= 9 <= maxAge).
+  minAge                 Int?
+  maxAge                 Int?
+  // Orthogonal to `mode`: a 1-on-1 batch can be either online or in-studio.
+  sessionFormat          SessionFormat @default(group)
+  // Academy-declared restriction. Display + intent only — not enforced at booking time yet.
+  gender                 BatchGender   @default(anyone)
+  // Academy-authored batch copy shown to learners.
+  description            String?
+  thingsToKnow           String[]      @default([])
+  capacity               Int
+  trialFeePaise          Int
+  monthlyFeePaise        Int
+  // S1.3: academy-set quarterly/annual discounts in basis points, capped at 3000 (30%).
+  // Stored here as the catalog source of truth; consumed by enrol pricing in S2.3.
+  quarterlyDiscountBps   Int           @default(0)
+  annualDiscountBps      Int           @default(0)
+  // S3.4: academy-set number of classes per month (the explicit entitled count).
+  sessionsPerMonth       Int           @default(4)
+  // S3.3: the provisioned 100ms live room id for this batch (lazily created).
+  liveRoomId             String?
+  mode                   BatchMode     @default(offline)
+  status                 BatchStatus   @default(active)
+  // Set when the academy requests discontinuation (status → closing). Drives the 30-day notice gate.
+  discontinueRequestedAt DateTime?
+  createdAt              DateTime      @default(now())
+
+  timings            BatchTiming[]
+  slots              Slot[]
+  bookings           Booking[]
+  trials             Trial[]
+  enrollments        Enrollment[]
+  attendances        BatchAttendance[]
+  reviews            Review[]
+  transferRequestsTo BatchTransferRequest[] @relation("TransferToBatch")
+  classSessions      ClassSession[]
+  sessionCredits     SessionCredit[]
+  sessionReminders   SessionReminderSent[]
+  classNotes         ClassNote[]
+
+  @@index([academyId, status])
+  @@index([programId])
+  @@map("batches")
+}
+
+// S5.2: durable idempotency for class/attendance reminders. Sessions are projected from
+// BatchTiming (no row to mark), so this is the "already reminded" guard per (batch, date, kind).
+enum ReminderKind {
+  class
+  attendance
+  // "nobody checked in, this class wasn't recorded" — the one attendance push the academy gets,
+  // deduped per session by the same unique row below.
+  zero_scan
+}
+
+model SessionReminderSent {
+  id          String       @id @default(cuid())
+  batchId     String
+  batch       Batch        @relation(fields: [batchId], references: [id])
+  sessionDate DateTime     @db.Date
+  kind        ReminderKind
+  sentAt      DateTime     @default(now())
+
+  @@unique([batchId, sessionDate, kind])
+  @@map("session_reminders_sent")
+}
+
+// A class session as a RECORD, not a projection. Sessions used to be derived on read from
+// BatchTiming with CancelledSession overlaid, which meant history rewrote itself whenever a batch
+// changed its timetable, and "was there a class on Wednesday" had no stored answer. This table is
+// that answer; it also absorbs CancelledSession (same key, same statement — two tables asserting
+// one fact would eventually disagree). See ai-usage/attendance-tracking_plan.md decisions 1 & 2.
+model ClassSession {
+  id                   String             @id @default(cuid())
+  batchId              String
+  batch                Batch              @relation(fields: [batchId], references: [id])
+  sessionDate          DateTime           @db.Date
+  status               ClassSessionStatus @default(held)
+  // null = not closed yet, or closed with zero check-ins ("not recorded" — decision 6). Either
+  // way the session is out of every denominator until the worker finalises it.
+  finalisedAt          DateTime?
+  // Cancellation reason, carried over from CancelledSession.
+  reason               String?
+  cancelledByAccountId String?
+  createdAt            DateTime           @default(now())
+
+  credits SessionCredit[]
+
+  @@unique([batchId, sessionDate])
+  @@index([batchId, sessionDate])
+  @@map("class_sessions")
+}
+
+enum ClassSessionStatus {
+  held
+  cancelled
+}
+
+// Class notes: the academy's record of what a batch covered on a given day. Anchored to the
+// same session key as BatchAttendance / ClassSession / SessionReminderSent, deliberately without
+// a ClassSession FK: a note can be written for a day the QR was never shown. One note per
+// (batch, day); files hang off it.
+// See ai-usage/class-notes_plan.md.
+model ClassNote {
+  id                 String          @id @default(cuid())
+  batchId            String
+  batch              Batch           @relation(fields: [batchId], references: [id])
+  sessionDate        DateTime        @db.Date
+  // "what we covered" — optional, but a note must carry either a body or a file.
+  body               String?
+  files              ClassNoteFile[]
+  createdByAccountId String
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@unique([batchId, sessionDate])
+  @@index([batchId, sessionDate])
+  @@map("class_notes")
+}
+
+// A note attachment. Stores a PRIVATE storage key, not a public URL — unlike every other media
+// model here — because notes are entitlement-gated and streamed through GET /me/notes/:id/file.
+model ClassNoteFile {
+  id          String    @id @default(cuid())
+  classNoteId String
+  classNote   ClassNote @relation(fields: [classNoteId], references: [id], onDelete: Cascade)
+  storageKey  String
+  fileName    String
+  mimeType    String
+  sizeBytes   Int
+  createdAt   DateTime  @default(now())
+
+  @@index([classNoteId])
+  @@map("class_note_files")
+}
+
+// S3.4: a make-good credit (+1 session) appended to an enrolment when a class is cancelled.
+model SessionCredit {
+  id             String        @id @default(cuid())
+  enrollmentId   String
+  enrollment     Enrollment    @relation(fields: [enrollmentId], references: [id])
+  batchId        String
+  batch          Batch         @relation(fields: [batchId], references: [id])
+  classSessionId String?
+  classSession   ClassSession? @relation(fields: [classSessionId], references: [id])
+  reason         String
+  sessionCount   Int           @default(1)
+  createdAt      DateTime      @default(now())
+
+  @@index([enrollmentId])
+  @@map("session_credits")
+}
+
+enum BatchStatus {
+  active
+  inactive
+  // Academy-initiated discontinuation lifecycle (see plan §7). `closing`: removed from
+  // discovery + blocks new trials/enrol/renew, but existing enrolments serve out. `ended`:
+  // fully discontinued (deletable).
+  closing
+  ended
+}
+
+// Group class vs private tuition. Separate from BatchMode so every combination
+// (online 1-on-1, in-studio group, …) is expressible.
+enum SessionFormat {
+  group
+  one_on_one
+}
+
+// Academy-declared gender restriction on a batch. Enum rather than a `femaleOnly`
+// boolean so `male_only` can be added without a data migration.
+enum BatchGender {
+  anyone
+  female_only
+}
+
+enum BatchMode {
+  online
+  offline
+}
+
+model BatchTiming {
+  id          String @id @default(cuid())
+  batchId     String
+  batch       Batch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  dayOfWeek   Int
+  startTime   String @db.VarChar(5)
+  durationMin Int
+
+  @@index([batchId])
+  @@map("batch_timings")
+}
+
+// DORMANT (S2.1 = Option B). Trial booking now runs off `capacity − enrolled` (no slots);
+// Booking/Trial.slotId are nullable and this model is unused by live flows. Kept only to
+// avoid the large deletion blast radius — DELETION DEFERRED as cleanup DF1 (see
+// ai-usage/final-app/plan/deviations-and-deferrals.md). Safe to drop the Slot model +
+// `slots` module + SlotStatus + seed slot rows in that pass.
+model Slot {
+  id            String     @id @default(cuid())
+  batchId       String
+  batch         Batch      @relation(fields: [batchId], references: [id])
+  slotTime      DateTime
+  capacity      Int
+  reservedCount Int        @default(0)
+  status        SlotStatus @default(open)
+  createdAt     DateTime   @default(now())
+
+  bookings Booking[]
+  trials   Trial[]
+
+  @@index([batchId, slotTime])
+  @@map("slots")
+}
+
+enum SlotStatus {
+  open
+  full
+  past
+}
+
+// ---------- Booking + Payment ----------
+
+model Booking {
+  id                   String        @id @default(cuid())
+  userId               String
+  user                 User          @relation(fields: [userId], references: [id])
+  // Family accounts: userId is who booked and pays; learnerId is who attends.
+  learnerId            String
+  learner              Learner       @relation(fields: [learnerId], references: [id])
+  batchId              String
+  batch                Batch         @relation(fields: [batchId], references: [id])
+  // S2.1: trial booking is off capacity, not published slots. slotId is now legacy
+  // (dormant Slot model); trialAt is the canonical chosen trial time.
+  slotId               String?
+  slot                 Slot?         @relation(fields: [slotId], references: [id])
+  trialAt              DateTime?
+  status               BookingStatus @default(initiated)
+  rescheduleCount      Int           @default(0)
+  reservationExpiresAt DateTime
+  createdAt            DateTime      @default(now())
+  paidAt               DateTime?
+  cancelledAt          DateTime?
+
+  payment Payment?
+  trial   Trial?
+
+  @@index([userId, status])
+  @@index([trialAt, status])
+  @@index([learnerId])
+  @@map("bookings")
+}
+
+enum BookingStatus {
+  initiated
+  paid
+  confirmed
+  cancelled
+  rescheduled
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  bookingId         String        @unique
+  booking           Booking       @relation(fields: [bookingId], references: [id])
+  amountPaise       Int
+  currency          String        @default("INR") @db.VarChar(3)
+  razorpayOrderId   String        @unique
+  razorpayPaymentId String?
+  status            PaymentStatus @default(initiated)
+  idempotencyKey    String        @unique
+  refundStatus      RefundStatus?
+  razorpayRefundId  String?
+  refundedAt        DateTime?
+  refundAmountPaise Int?
+  createdAt         DateTime      @default(now())
+  capturedAt        DateTime?
+
+  @@index([status])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  initiated
+  pending
+  captured
+  failed
+  refunded
+}
+
+enum RefundStatus {
+  requested
+  processed
+  failed
+}
+
+// ---------- Trial ----------
+
+model Trial {
+  id                          String      @id @default(cuid())
+  userId                      String
+  user                        User        @relation(fields: [userId], references: [id])
+  learnerId                   String
+  learner                     Learner     @relation(fields: [learnerId], references: [id])
+  academyId                   String
+  academy                     Academy     @relation(fields: [academyId], references: [id])
+  batchId                     String
+  batch                       Batch       @relation(fields: [batchId], references: [id])
+  // S2.1: slotId legacy (dormant Slot model); trialAt is canonical.
+  slotId                      String?
+  slot                        Slot?       @relation(fields: [slotId], references: [id])
+  bookingId                   String      @unique
+  booking                     Booking     @relation(fields: [bookingId], references: [id])
+  trialAt                     DateTime
+  status                      TrialStatus @default(booked)
+  attendanceMarkedAt          DateTime?
+  attendanceMarkedByAccountId String?
+  reminderSent                Boolean     @default(false) // 23–25h reminder (jobs/trialReminder)
+  reminder1hSent              Boolean     @default(false) // 1h reminder (workers/trial-reminder) — separate durable guard
+  createdAt                   DateTime    @default(now())
+
+  review Review?
+
+  @@index([userId, status])
+  @@index([academyId, status, trialAt])
+  @@index([learnerId])
+  @@map("trials")
+}
+
+enum TrialStatus {
+  booked
+  attended
+  missed
+  cancelled
+}
+
+// ---------- Reviews ----------
+
+// S4.3: a review from a TRIAL-taker or an ENROLLED student. trialId/enrollmentId are
+// nullable+unique (Postgres allows many NULLs); the real rule is one review per (user, academy).
+enum ReviewSource {
+  trial
+  enrollment
+}
+
+model Review {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  academyId      String
+  academy        Academy      @relation(fields: [academyId], references: [id])
+  batchId        String
+  batch          Batch        @relation(fields: [batchId], references: [id])
+  source         ReviewSource @default(trial)
+  trialId        String?      @unique
+  trial          Trial?       @relation(fields: [trialId], references: [id])
+  enrollmentId   String?      @unique
+  enrollment     Enrollment?  @relation(fields: [enrollmentId], references: [id])
+  rating         Int          @db.SmallInt
+  comment        String?
+  response       String?
+  // Ops Console moderation: soft-hide the free-text fields from public view (rating is kept).
+  commentHidden  Boolean      @default(false)
+  responseHidden Boolean      @default(false)
+  respondedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  // Set the first time the student rewrites their review. Null means "never edited", which is
+  // why this is not `@updatedAt` — an academy replying must not make the review look edited.
+  editedAt       DateTime?
+
+  @@unique([userId, academyId])
+  @@index([academyId, createdAt])
+  @@map("reviews")
+}
+
+// ---------- Engagement ----------
+
+model Event {
+  id                   String      @id @default(cuid())
+  type                 EventType
+  title                String
+  // An event can span multiple art-forms (e.g. an all-disciplines competition) — hence a list.
+  category             Category[]
+  description          String
+  startAt              DateTime
+  endAt                DateTime
+  location             String
+  // Whether you attend in person, from a link, or either. Until this column existed the only
+  // signal was the word "Online" appearing in the free-text `location`, which the web's
+  // schema.org output had to regex for (web_phase3_plan.md §2.1).
+  mode                 EventMode   @default(offline)
+  lat                  Float?
+  lng                  Float?
+  capacity             Int?
+  enrolledCount        Int         @default(0)
+  pricePaise           Int         @default(0)
+  organizerName        String
+  coverColor           String      @db.VarChar(20)
+  // #7: real cover + gallery images (coverColor kept as fallback when no cover uploaded).
+  coverImageUrl        String?
+  galleryImageUrls     String[]
+  // #6: when registration opens. Order enforced: now <= registrationOpensAt <= registrationDeadline <= startAt < endAt.
+  registrationOpensAt  DateTime?
+  registrationDeadline DateTime?
+  prizePaise           Int?
+  isSpotlight          Boolean     @default(false)
+  divisions            String[]
+  // Ops Console lifecycle: `cancelled` events are refunded + hidden from discovery.
+  status               EventStatus @default(scheduled)
+  cancelledReason      String?
+  createdAt            DateTime    @default(now())
+
+  registrations EventRegistration[]
+
+  @@index([type, startAt])
+  @@map("events")
+}
+
+enum EventType {
+  competition
+  workshop
+  meetup
+}
+
+enum EventMode {
+  offline
+  online
+  hybrid
+}
+
+enum EventStatus {
+  scheduled
+  cancelled
+}
+
+// S4.4: workshops are Online or Offline only (masterclass/demo dropped); non-refundable.
+enum WorkshopType {
+  online
+  offline
+}
+
+model Workshop {
+  id              String       @id @default(cuid())
+  academyId       String
+  academy         Academy      @relation(fields: [academyId], references: [id])
+  type            WorkshopType
+  title           String
+  // The art form, so a workshop answers the same "Music / Dance / Arts / Yoga" filter every
+  // other discovery surface does. Required: an uncategorised workshop is invisible under any
+  // filter but "All art forms", which is indistinguishable from not being published.
+  category        Category
+  description     String
+  startAt         DateTime
+  durationMin     Int
+  // When it is OVER. Derived from startAt + durationMin on every write (see workshops/repo.ts)
+  // rather than computed per query, because discovery filters on it: `endAt >= now()` is an
+  // index seek, while "startAt + interval" is a scan that no index can serve and that cannot
+  // be combined with `take` without over-fetching.
+  //
+  // It is the END, not the start, that hides a workshop — a live session must stay listed
+  // while it runs, which is the same window `serialize` reports as `live`.
+  endAt           DateTime
+  location        String?
+  capacity        Int
+  registeredCount Int          @default(0)
+  pricePaise      Int          @default(0)
+  // EDITORIAL state only — draft vs published. It does NOT say whether the workshop has
+  // happened: nothing moves it off 'upcoming', which is exactly why past workshops used to
+  // keep showing. Time is answered by `endAt`.
+  status          String       @default("upcoming")
+  // Optional poster. Null keeps the apps' generated/stock cover fallback.
+  coverImageUrl   String?
+  createdAt       DateTime     @default(now())
+
+  registrations WorkshopRegistration[]
+  // Who is CONDUCTING it. A join table rather than a `coachId` column because a workshop can
+  // be co-hosted — two teachers running a masterclass together — which `Batch.coachId` cannot
+  // express. An EMPTY list means the owner is running it themselves, and no teacher sees it.
+  coaches       WorkshopCoach[]
+
+  @@index([academyId, startAt])
+  // Serves discovery: published workshops that have not ended yet, in date order.
+  @@index([status, endAt])
+  @@map("workshops")
+}
+
+// Workshop ↔ Coach. This is what makes a teacher's 'assigned' scope expressible for workshops:
+// before it existed there was nothing on `Workshop` to filter by, so a teacher was shown every
+// workshop in the branch — with its pricing — instead of just the ones they teach.
+model WorkshopCoach {
+  id         String   @id @default(cuid())
+  workshopId String
+  workshop   Workshop @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  coachId    String
+  coach      Coach    @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  @@unique([workshopId, coachId])
+  @@index([coachId])
+  @@map("workshop_coaches")
+}
+
+model WorkshopRegistration {
+  id          String             @id @default(cuid())
+  workshopId  String
+  workshop    Workshop           @relation(fields: [workshopId], references: [id])
+  userId      String
+  user        User               @relation(fields: [userId], references: [id])
+  status      RegistrationStatus @default(pending)
+  // Tickets in this booking (1–6). One booking per account per workshop; seats are counted per
+  // ticket, so registeredCount moves by `quantity`. Online workshops are always 1.
+  quantity    Int                @default(1)
+  cancelledAt DateTime?
+  createdAt   DateTime           @default(now())
+
+  payment   WorkshopPayment?
+  attendees WorkshopAttendee[]
+
+  @@unique([workshopId, userId])
+  @@map("workshop_registrations")
+}
+
+/// One named ticket in a workshop booking. Position 0 is the account holder.
+model WorkshopAttendee {
+  id             String               @id @default(cuid())
+  registrationId String
+  registration   WorkshopRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  name           String
+  position       Int
+  createdAt      DateTime             @default(now())
+
+  @@unique([registrationId, position])
+  @@map("workshop_attendees")
+}
+
+enum RegistrationStatus {
+  pending
+  confirmed
+  cancelled
+}
+
+model WorkshopPayment {
+  id                String               @id @default(cuid())
+  registrationId    String               @unique
+  registration      WorkshopRegistration @relation(fields: [registrationId], references: [id])
+  amountPaise       Int
+  // Tickets this order was priced for. Capture confirms exactly this many.
+  quantity          Int                  @default(1)
+  currency          String               @default("INR") @db.VarChar(3)
+  razorpayOrderId   String               @unique
+  razorpayPaymentId String?
+  status            PaymentStatus        @default(initiated)
+  idempotencyKey    String               @unique
+  refundStatus      RefundStatus?
+  razorpayRefundId  String?
+  refundedAt        DateTime?
+  refundAmountPaise Int?
+  createdAt         DateTime             @default(now())
+  capturedAt        DateTime?
+
+  @@index([status])
+  @@map("workshop_payments")
+}
+
+model EventRegistration {
+  id          String             @id @default(cuid())
+  eventId     String
+  event       Event              @relation(fields: [eventId], references: [id])
+  userId      String
+  user        User               @relation(fields: [userId], references: [id])
+  status      RegistrationStatus @default(pending)
+  // Tickets (meetups, workshop events) or participants (competitions) in this booking, 1–6.
+  // enrolledCount moves by `quantity`.
+  quantity    Int                @default(1)
+  cancelledAt DateTime?
+  createdAt   DateTime           @default(now())
+
+  payment   EventPayment?
+  attendees EventAttendee[]
+
+  @@unique([eventId, userId])
+  @@map("event_registrations")
+}
+
+/// One ticket or participant in an event booking. A competition participant is a family learner
+/// (`learnerId` set); a meetup / workshop-event ticket is a typed name. Position 0 comes first.
+model EventAttendee {
+  id             String            @id @default(cuid())
+  registrationId String
+  registration   EventRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  name           String
+  position       Int
+  learnerId      String?
+  learner        Learner?          @relation(fields: [learnerId], references: [id])
+  createdAt      DateTime          @default(now())
+
+  @@unique([registrationId, position])
+  @@index([learnerId])
+  @@map("event_attendees")
+}
+
+model EventPayment {
+  id                String            @id @default(cuid())
+  registrationId    String            @unique
+  registration      EventRegistration @relation(fields: [registrationId], references: [id])
+  amountPaise       Int
+  // Tickets this order was priced for. Capture confirms exactly this many.
+  quantity          Int               @default(1)
+  currency          String            @default("INR") @db.VarChar(3)
+  razorpayOrderId   String            @unique
+  razorpayPaymentId String?
+  status            PaymentStatus     @default(initiated)
+  idempotencyKey    String            @unique
+  refundStatus      RefundStatus?
+  razorpayRefundId  String?
+  refundedAt        DateTime?
+  refundAmountPaise Int?
+  createdAt         DateTime          @default(now())
+  capturedAt        DateTime?
+
+  @@index([status])
+  @@map("event_payments")
+}
+
+// ---------- Enrollment ----------
+
+model Enrollment {
+  id                     String             @id @default(cuid())
+  userId                 String
+  user                   User               @relation(fields: [userId], references: [id])
+  // Family accounts: userId is the account that enrolled and pays; learnerId is who attends.
+  // One enrollment per learner per batch, so siblings can share a batch.
+  learnerId              String
+  learner                Learner            @relation(fields: [learnerId], references: [id])
+  batchId                String
+  batch                  Batch              @relation(fields: [batchId], references: [id])
+  status                 EnrollmentStatus   @default(active)
+  currentPeriodId        String?
+  defaultPackage         EnrollmentPackage?
+  pausedUntil            DateTime?
+  discontinueRequestedAt DateTime?
+  startedAt              DateTime           @default(now())
+  // Last time this student opened the batch's class-notes screen — drives the "(2 new)" badge.
+  notesSeenAt            DateTime?
+
+  periods          EnrollmentPeriod[]
+  pauses           EnrollmentPause[]
+  transferRequests BatchTransferRequest[] @relation("TransferFromEnrollment")
+  sessionCredits   SessionCredit[]
+  reviews          Review[]
+
+  @@unique([learnerId, batchId])
+  @@index([userId])
+  @@map("enrollments")
+}
+
+enum EnrollmentStatus {
+  active
+  inactive
+}
+
+enum EnrollmentPackage {
+  monthly
+  quarterly
+  biannual
+  annual
+}
+
+model EnrollmentPeriod {
+  id                     String                 @id @default(cuid())
+  enrollmentId           String
+  enrollment             Enrollment             @relation(fields: [enrollmentId], references: [id])
+  packageType            EnrollmentPackage
+  startDate              DateTime               @db.Date
+  endDate                DateTime               @db.Date
+  amountPaise            Int
+  status                 EnrollmentPeriodStatus @default(active)
+  gracePeriodEnd         DateTime?
+  lastReminderSentAt     DateTime?
+  remindersSentCount     Int                    @default(0)
+  discontinueRequestedAt DateTime?
+  discontinueEffectiveAt DateTime?
+  discontinueReason      DiscontinuationReason?
+  createdAt              DateTime               @default(now())
+
+  payment EnrollmentPayment?
+  pauses  EnrollmentPause[]
+
+  @@index([enrollmentId, endDate])
+  @@map("enrollment_periods")
+}
+
+enum EnrollmentPeriodStatus {
+  active
+  grace
+  expired
+  cancelled
+}
+
+enum DiscontinuationReason {
+  schedule_issue
+  financial
+  moving_city
+  not_satisfied
+  switching_academy
+  other
+}
+
+model EnrollmentPayment {
+  id                 String           @id @default(cuid())
+  enrollmentPeriodId String           @unique
+  enrollmentPeriod   EnrollmentPeriod @relation(fields: [enrollmentPeriodId], references: [id])
+  amountPaise        Int
+  currency           String           @default("INR") @db.VarChar(3)
+  razorpayOrderId    String           @unique
+  razorpayPaymentId  String?
+  status             PaymentStatus    @default(initiated)
+  idempotencyKey     String           @unique
+  refundStatus       RefundStatus?
+  razorpayRefundId   String?
+  refundedAt         DateTime?
+  refundAmountPaise  Int?
+  createdAt          DateTime         @default(now())
+  capturedAt         DateTime?
+
+  @@index([status])
+  @@map("enrollment_payments")
+}
+
+model EnrollmentPause {
+  id                 String            @id @default(cuid())
+  enrollmentId       String
+  enrollment         Enrollment        @relation(fields: [enrollmentId], references: [id])
+  // The PAID PERIOD this pause is charged against. The allowance (1 week monthly, 2 quarterly)
+  // is per period and refreshes on renewal, so the allowance query needs this grain — deriving it
+  // from dates would mis-bill a pause that straddles a renewal boundary.
+  // Nullable only for pauses predating the allowance rule; those count against nothing.
+  enrollmentPeriodId String?
+  enrollmentPeriod   EnrollmentPeriod? @relation(fields: [enrollmentPeriodId], references: [id])
+  duration           PauseDuration
+  reason             String?
+  status             PauseStatus       @default(pending)
+  startDate          DateTime?
+  endDate            DateTime?
+  requestedAt        DateTime          @default(now())
+  approvedAt         DateTime?
+  rejectedAt         DateTime?
+  rejectedReason     String?
+  resumedAt          DateTime?
+
+  @@index([enrollmentId, status])
+  @@index([enrollmentPeriodId, status])
+  @@map("enrollment_pauses")
+}
+
+// Always whole weeks: extending the period by `7 × weeks` days reproduces the batch's weekly
+// timing pattern, so the missed classes are re-delivered exactly. `one_month` was removed
+// (2026-09-05) because the per-period allowance now caps at 2 weeks.
+enum PauseDuration {
+  one_week
+  two_weeks
+}
+
+enum PauseStatus {
+  pending
+  approved
+  active
+  ended
+  rejected
+}
+
+model BatchTransferRequest {
+  id               String                @id @default(cuid())
+  fromEnrollmentId String
+  fromEnrollment   Enrollment            @relation("TransferFromEnrollment", fields: [fromEnrollmentId], references: [id])
+  toBatchId        String
+  toBatch          Batch                 @relation("TransferToBatch", fields: [toBatchId], references: [id])
+  reason           String?
+  status           TransferRequestStatus @default(pending)
+  requestedAt      DateTime              @default(now())
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  rejectedReason   String?
+  newEnrollmentId  String?
+
+  @@index([fromEnrollmentId])
+  @@index([toBatchId, status])
+  @@map("batch_transfer_requests")
+}
+
+enum TransferRequestStatus {
+  pending
+  approved
+  rejected
+}
+
+enum MonthlyRefundPolicy {
+  no_refund
+  prorated
+  full_if_early
+}
+
+// ---------- Batch Attendance ----------
+
+// Unchanged in shape. What changed is that `present: false` rows are now actually written — by
+// workers/session-close.ts at session close, for every expected student who did not check in.
+// `markedByAccountId` therefore distinguishes "student scanned" (null) from "system marked".
+model BatchAttendance {
+  id                String           @id @default(cuid())
+  batchId           String
+  batch             Batch            @relation(fields: [batchId], references: [id])
+  userId            String
+  user              User             @relation(fields: [userId], references: [id])
+  learnerId         String
+  learner           Learner          @relation(fields: [learnerId], references: [id])
+  date              DateTime         @db.Date
+  present           Boolean
+  // How this row was written. A manual mark never claims a code was entered.
+  method            AttendanceMethod @default(otp)
+  reason            String?
+  markedByAccountId String?
+  markedAt          DateTime         @default(now())
+
+  @@unique([batchId, learnerId, date])
+  @@index([userId])
+  @@map("batch_attendances")
+}
+
+enum AttendanceMethod {
+  otp // teacher entered the learner's code
+  manual // staff marked during class without a code
+  correction // staff changed the register after class
+  auto // the session closer wrote an absence
+}
+
+// ---------- Academy staff & RBAC ----------
+//
+// `AcademyAccount` stays the OWNER identity. `StaffAccount` is a second, PARALLEL academy-side
+// identity for managers, teachers and (later) custom roles. Both mint tokens with
+// `role: 'academy'` — that claim means "academy-side audience", not "owner" — disambiguated by
+// a `sub_kind` JWT claim. Keeping one role string is what lets the ~77 existing academy handlers
+// and ~60 `req.user.academy_id` reads stay untouched.
+//
+// Permissions are DB-backed and resolved per request, never carried in the token: an owner
+// revoking a role must take effect at once, not after the 15-minute access-token TTL. This
+// mirrors the existing precedent in plugins/auth.ts, which already prefers the DB over the
+// token for `groupId`.
+//
+// See ai-usage/final-app/plan/academy-staff-roles.md §2.
+
+// A non-owner academy-side login.
+model StaffAccount {
+  id                 String       @id @default(cuid())
+  groupId            String
+  group              AcademyGroup @relation(fields: [groupId], references: [id])
+  // Mirrors AcademyAccount's auth columns so staff OAuth is later a SERVICE change, not a
+  // second migration. Staff login is OTP-only for now: loginWithOAuth has the same
+  // auto-create hazard as the OTP path and no StaffAccount lookup yet (DF8).
+  phone              String?      @unique
+  email              String?      @unique
+  emailVerified      Boolean      @default(false)
+  appleSub           String?      @unique
+  googleSub          String?      @unique
+  name               String
+  status             StaffStatus  @default(invited)
+  // Set when the invite is redeemed by a successful OTP login. The phone IS the invite —
+  // there is no invite link and no email.
+  activatedAt        DateTime?
+  deactivatedAt      DateTime?
+  // The AcademyAccount that issued the invite. Bare String, not an FK: it is provenance for
+  // the audit trail, and the inviter's row must not be able to block a delete of theirs.
+  invitedByAccountId String?
+  // Bumped on every grant change. Pre-cut seam: a later permission cache keyed
+  // (staffId, grantsVersion) is then safe with no token change and no migration.
+  grantsVersion      Int          @default(0)
+  createdAt          DateTime     @default(now())
+
+  assignments StaffRoleAssignment[]
+
+  @@index([groupId])
+  @@map("staff_accounts")
+}
+
+enum StaffStatus {
+  invited
+  active
+  deactivated
+}
+
+// The role catalogue. Seeded with owner/manager/teacher as `isSystem` rows shared by every
+// brand (groupId NULL). Custom roles are later rows with isSystem=false AND a groupId —
+// data only, no migration.
+model StaffRole {
+  id        String        @id @default(cuid())
+  key       String
+  label     String
+  isSystem  Boolean       @default(false)
+  groupId   String?
+  group     AcademyGroup? @relation(fields: [groupId], references: [id])
+  createdAt DateTime      @default(now())
+
+  permissions StaffRolePermission[]
+  assignments StaffRoleAssignment[]
+
+  @@unique([key, groupId])
+  @@map("staff_roles")
+}
+
+// role -> permission WITH the scope that role gets on it. The scope column is what makes
+// "Teacher can view students" mean "...students in their own batches".
+model StaffRolePermission {
+  id         String          @id @default(cuid())
+  roleId     String
+  role       StaffRole       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  // A key from the catalogue in src/lib/permissions.ts, e.g. 'students.view'. Deliberately a
+  // STRING, not an enum: adding a permission must not be a migration.
+  permission String
+  scope      PermissionScope
+  // FLAT DENY, and it beats every grant from every other assignment. Absence of a grant is the
+  // ordinary denial; an explicit deny row exists for the handful of keys where absence is not
+  // enough — `refunds.issue` above all, because effective permissions are the UNION across a
+  // staff account's assignments, so a future custom role granting it would otherwise silently
+  // hand a manager the refund button. Without this column, "a manager can never refund" is
+  // not expressible.
+  deny       Boolean         @default(false)
+
+  @@unique([roleId, permission])
+  @@map("staff_role_permissions")
+}
+
+enum PermissionScope {
+  academy // the whole group (brand)
+  branch // the assigned branches only
+  assigned // only batches the linked coach teaches
+}
+
+// One row per role a staff account holds. MULTIPLE rows per account are the point: a manager
+// who also coaches is one login, not two, and their effective permissions are the union.
+model StaffRoleAssignment {
+  id        String       @id @default(cuid())
+  staffId   String
+  staff     StaffAccount @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  roleId    String
+  role      StaffRole    @relation(fields: [roleId], references: [id])
+  // The Coach whose batches are this assignment's 'assigned' scope. NULL for a manager.
+  //
+  // `@unique` is the constraint whose absence let one person become two: a coach may back at
+  // most ONE login. The column is nullable and Postgres treats NULLs as distinct, so any number
+  // of manager assignments still coexist. A teacher assignment is never created without it —
+  // the invite creates the Coach in the same transaction — so the invalid state is now
+  // unreachable rather than merely rejected.
+  coachId   String?      @unique
+  coach     Coach?       @relation(fields: [coachId], references: [id])
+  createdAt DateTime     @default(now())
+
+  branches StaffBranchScope[]
+
+  @@unique([staffId, roleId])
+  @@map("staff_role_assignments")
+}
+
+// The branch-scope table plugins/auth.ts anticipates (named AcademyAccountBranch in its
+// comment). Hung off the ASSIGNMENT, not the account, so "manager @ Andheri + teacher @
+// Bandra" is expressible without a second table later.
+model StaffBranchScope {
+  id           String              @id @default(cuid())
+  assignmentId String
+  assignment   StaffRoleAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  academyId    String
+  academy      Academy             @relation(fields: [academyId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, academyId])
+  @@index([academyId])
+  @@map("staff_branch_scopes")
+}
+
+// BRAND facts that were wrongly living on the per-login `AcademySettings` row. Once a brand has
+// more than one login, "which contact number does a LEARNER see?" must not depend on which
+// staff member saved last — these three are read by student-facing code.
+//
+// ⚠️ TRANSITIONAL: this table is populated and authoritative-in-waiting, but the columns of the
+// same name on `AcademySettings` are still the live source. The readers flip and those columns
+// drop in the Manager slice, together with the PUT /studio/settings permission split.
+model AcademyGroupSettings {
+  groupId          String       @id
+  group            AcademyGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  contactEmail     String?
+  contactWhatsapp  String?
+  privacyShowPhone Boolean      @default(false)
+
+  @@map("academy_group_settings")
+}
+
+// ---------- Plumbing ----------
+
+model RefreshToken {
+  id          String      @id @default(cuid())
+  subjectId   String
+  subjectRole SubjectRole
+  tokenHash   String      @unique
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime    @default(now())
+
+  @@index([subjectId, subjectRole])
+  @@map("refresh_tokens")
+}
+
+// The table a polymorphic `subjectId` points at. NOT the JWT `role` claim: a StaffAccount
+// mints a token with role:'academy' (that claim means "academy-side audience", not "owner"),
+// so `staff` exists here only to keep RefreshToken/ExpoPushToken rows unambiguous on refresh.
+enum SubjectRole {
+  student
+  academy
+  admin
+  staff
+}
+
+// ---------- Findemy platform operators (Ops Console) ----------
+
+// Allowlist of Findemy staff who may sign into the Ops Console. A valid admin login
+// requires BOTH a Google Workspace token (hd == Findemy domain) AND a row here.
+// `role` is deferred until RBAC lands; the JWT `perms` claim is plumbed-but-unenforced.
+model AdminUser {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  disabled  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("admin_users")
+}
+
+// Immutable record of every state-changing action by an operator — a Findemy admin OR an
+// academy-side principal. Primary internal control while roles are coarse. `meta` holds
+// { before, after, ... } snapshots.
+model AuditLog {
+  id         String         @id @default(cuid())
+  // RETAINED and still the Ops Console's filter column — ~29 admin call sites pass it and the
+  // [adminId, createdAt] index below depends on it. Nullable now: an academy-side actor has no
+  // adminId. New writers should set actorId/actorRole; admin writers set both.
+  adminId    String?
+  // The polymorphic actor. `actorRole` names the table `actorId` points at:
+  // admin -> AdminUser, academy -> AcademyAccount (owner), staff -> StaffAccount,
+  // system -> the SYSTEM_MARKER written by cron workers.
+  // ⚠️ The two @default()s exist ONLY so this column could be added to a non-empty table.
+  // Drop them once the backfill has run everywhere — see pre-production-checklist.md §2.
+  actorId    String         @default("")
+  actorRole  AuditActorRole @default(admin)
+  // Denormalised so an academy owner's activity log is one indexed read, without joining
+  // through five different target types to discover which brand a row belongs to.
+  groupId    String?
+  academyId  String?
+  action     String
+  targetType String
+  targetId   String
+  meta       Json?
+  createdAt  DateTime       @default(now())
+
+  @@index([targetType, targetId])
+  @@index([adminId, createdAt])
+  @@index([groupId, createdAt])
+  @@map("audit_logs")
+}
+
+enum AuditActorRole {
+  admin
+  academy
+  staff
+  system
+}
+
+model ExpoPushToken {
+  id          String      @id @default(cuid())
+  // Polymorphic subject: a student's User.id OR an academy's AcademyAccount.id (by subjectRole).
+  // No FK — subjectId can reference either table, so a User FK wrongly rejected academy tokens.
+  subjectId   String
+  subjectRole SubjectRole
+  token       String      @unique
+  platform    Platform
+  lastSeenAt  DateTime    @default(now())
+
+  @@index([subjectId, subjectRole])
+  @@map("expo_push_tokens")
+}
+
+enum Platform {
+  ios
+  android
+}
+
+model OtpRequest {
+  id        String      @id
+  phone     String
+  role      SubjectRole
+  codeHash  String
+  attempts  Int         @default(0)
+  verified  Boolean     @default(false)
+  expiresAt DateTime
+  createdAt DateTime    @default(now())
+
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+  @@map("otp_requests")
+}
+
+// PER-LOGIN settings. Keyed on accountId, which is right for these: a manager and a teacher
+// genuinely want different alerts and quiet hours.
+//
+// The brand's public contact details and privacy flag deliberately do NOT live here any more —
+// they moved to `AcademyGroupSettings`, because stored per-login the contact number a LEARNER
+// sees would depend on which staff member saved last.
+model AcademySettings {
+  accountId             String  @id
+  notificationsNewTrial Boolean @default(true)
+  notificationsReview   Boolean @default(true)
+  notificationPrefs     Json?
+  quietHoursEnabled     Boolean @default(false)
+  quietStart            String?
+  quietEnd              String?
+
+  @@map("academy_settings")
+}
+
+// One row per FINANCIAL ENTITY per weekly payout period (not per branch — branches sharing an
+// entity settle together, which also pools the below-MIN carry-forward instead of stalling each
+// branch separately). Computed by the `payout-run` cron as `pending`, approved by an admin, then
+// executed via RazorpayX and reconciled to paid/failed. Idempotent via @@unique([financialEntityId, periodStart]).
+model Payout {
+  id                   String          @id @default(cuid())
+  financialEntityId    String
+  financialEntity      FinancialEntity @relation(fields: [financialEntityId], references: [id])
+  periodStart          DateTime?
+  periodEnd            DateTime?
+  // net = grossPaise − commissionPaise − reserveHeldPaise + reserveReleasedPaise − recoveryAppliedPaise
+  grossPaise           Int             @default(0)
+  commissionPaise      Int             @default(0)
+  reserveHeldPaise     Int             @default(0)
+  reserveReleasedPaise Int             @default(0)
+  recoveryAppliedPaise Int             @default(0)
+  // Positive net from prior `skipped` periods rolled into this row (below-MIN carry-forward).
+  carriedInPaise       Int             @default(0)
+  // True once a later payout has absorbed this (skipped) row's netPaise via carriedInPaise.
+  carryConsumed        Boolean         @default(false)
+  netPaise             Int             @default(0)
+  // Legacy column kept so existing rows/back-compat readers don't break; new rows mirror netPaise.
+  amountPaise          Int             @default(0)
+  status               PayoutStatus    @default(pending)
+  rzpTransferId        String?
+  utr                  String?
+  failureReason        String?
+  approvedByAdminId    String?
+  approvedAt           DateTime?
+  paidAt               DateTime?
+  createdAt            DateTime        @default(now())
+
+  @@unique([financialEntityId, periodStart])
+  @@index([financialEntityId, createdAt])
+  @@index([status])
+  @@map("payouts")
+}
+
+enum PayoutStatus {
+  pending
+  approved
+  processing
+  paid
+  failed
+  skipped
+}
+
+model SavedAcademy {
+  id        String   @id @default(cuid())
+  userId    String
+  academyId String
+  savedAt   DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  academy   Academy  @relation(fields: [academyId], references: [id])
+
+  @@unique([userId, academyId])
+  @@map("saved_academies")
+}
+
+enum ReferralStatus {
+  pending
+  claimed
+  expired
+}
+
+model Referral {
+  id         String         @id @default(cuid())
+  referrerId String
+  referreeId String?
+  code       String         @unique
+  status     ReferralStatus @default(pending)
+  createdAt  DateTime       @default(now())
+  claimedAt  DateTime?
+  referrer   User           @relation("ReferralsSent", fields: [referrerId], references: [id])
+  referree   User?          @relation("ReferralsReceived", fields: [referreeId], references: [id])
+
+  @@map("referrals")
+}
+
+// ---------- Support chat (#1: students & academies ↔ admin) ----------
+
+enum SupportParty {
+  student
+  academy
+}
+
+enum SupportStatus {
+  open
+  resolved
+}
+
+enum SupportSenderRole {
+  user
+  academy
+  admin
+}
+
+model SupportConversation {
+  id            String           @id @default(cuid())
+  party         SupportParty
+  userId        String?
+  academyId     String?
+  subject       String?
+  status        SupportStatus    @default(open)
+  createdAt     DateTime         @default(now())
+  lastMessageAt DateTime         @default(now())
+  user          User?            @relation(fields: [userId], references: [id])
+  academy       Academy?         @relation(fields: [academyId], references: [id])
+  messages      SupportMessage[]
+
+  @@index([status, lastMessageAt])
+  @@index([userId])
+  @@index([academyId])
+  @@map("support_conversations")
+}
+
+model SupportMessage {
+  id             String              @id @default(cuid())
+  conversationId String
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderRole     SupportSenderRole
+  senderId       String
+  body           String
+  attachmentUrls String[]            @default([])
+  createdAt      DateTime            @default(now())
+
+  @@index([conversationId, createdAt])
+  @@map("support_messages")
+}

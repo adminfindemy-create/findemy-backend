@@ -1,0 +1,9 @@
+{
+  "name": "@findemy/config",
+  "version": "0.0.1",
+  "private": true,
+  "files": ["biome.json", "tsconfig.base.json"],
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0"
+  }
+}

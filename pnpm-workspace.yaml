@@ -1,0 +1,13 @@
+packages:
+  - api
+  - shared/*
+allowBuilds:
+  '@biomejs/biome': true
+  '@prisma/client': true
+  '@prisma/engines': true
+  esbuild: true
+  msgpackr-extract: true
+  prisma: true
+shamefullyHoist: true
+strictPeerDependencies: false
+autoInstallPeers: true
