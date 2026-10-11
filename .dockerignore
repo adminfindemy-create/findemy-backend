@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/.turbo
+.git
+.github
+.env
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
+.DS_Store
+api/uploads
+api/private-uploads
+Dockerfile
+.dockerignore
