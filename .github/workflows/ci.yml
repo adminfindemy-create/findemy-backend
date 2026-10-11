@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same PR/branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck, lint, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm version comes from "packageManager" in the root package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # tsc and the tests need the generated Prisma client and the built @findemy/types.
+      - run: pnpm --filter @findemy/api exec prisma generate
+      - run: pnpm --filter @findemy/types build
+
+      - name: Typecheck
+        run: pnpm --filter @findemy/api typecheck
+
+      # Report-only for now: the codebase has ~700 pre-existing Biome findings (any / non-null
+      # assertions / formatting / import order). Drop continue-on-error once they are cleaned up.
+      - name: Lint (non-blocking)
+        run: pnpm --filter @findemy/api lint
+        continue-on-error: true
+
+      # Unit tests mock the DB, but src/lib/env.ts validates the environment at import time,
+      # so they need syntactically valid values. These are throwaway test-only credentials.
+      - name: Test
+        run: |
+          openssl ecparam -name prime256v1 -genkey -noout -out /tmp/ec.pem
+          export JWT_PRIVATE_KEY="$(openssl pkcs8 -topk8 -nocrypt -in /tmp/ec.pem)"
+          export JWT_PUBLIC_KEY="$(openssl ec -in /tmp/ec.pem -pubout 2>/dev/null)"
+          pnpm --filter @findemy/api exec vitest run
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          REDIS_URL: redis://localhost:6379
+
+  # Proves the Dockerfile still builds on every PR. Nothing is pushed here — the deploy
+  # workflow is what publishes images.
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
